@@ -1,0 +1,591 @@
+openapi: 3.0.3
+info:
+  title: CICS Banking Sample Application - z/OS Connect API
+  description: |
+    z/OS Connect RESTful APIs for the CICS Banking Sample Application.
+    These APIs provide JSON/REST access to backend COBOL programs running in CICS.
+    
+    z/OS Connect acts as a gateway between modern REST clients and traditional
+    CICS/COBOL applications, handling JSON-to-COMMAREA transformations.
+    
+    These APIs are consumed by:
+    - Customer Services Spring Boot Interface
+    - Payment Interface Spring Boot Application
+    - Other external applications requiring banking operations
+    
+    All APIs use IPIC protocol (port 30709) to communicate with the CICS region.
+  version: 1.0.0
+  contact:
+    name: CICS Banking Sample Application
+    url: https://github.com/cicsdev/cics-banking-sample-application-cbsa
+
+servers:
+  - url: http://localhost:30701
+    description: Local z/OS Connect server
+  - url: http://{host}:{port}
+    description: Configurable z/OS Connect server
+    variables:
+      host:
+        default: localhost
+        description: z/OS Connect hostname
+      port:
+        default: '30701'
+        description: z/OS Connect port
+
+tags:
+  - name: Payment
+    description: Payment processing operations
+  - name: Customer
+    description: Customer management operations
+  - name: Account
+    description: Account management operations
+
+paths:
+  /makepayment/dbcr:
+    put:
+      tags:
+        - Payment
+      summary: Process payment or credit
+      description: |
+        Processes a debit (payment) or credit (refund) transaction.
+        
+        Backend COBOL program: DBCRFUN
+        Copybook: PAYDBCR
+        
+        Negative amounts represent debits (payments from customer account).
+        Positive amounts represent credits (refunds to customer account).
+        
+        Error codes:
+        - '0': Success
+        - '1': Account not found
+        - '2': Problem with Db2
+        - '3': Insufficient funds
+        - '4': Invalid account type (cannot debit LOAN or MORTGAGE accounts)
+      operationId: makePayment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentRequest'
+            examples:
+              debit:
+                summary: Debit (payment) example
+                value:
+                  PAYDBCR:
+                    COMM_ACCNO: '00000876'
+                    COMM_AMT: -10.99
+                    COMM_SORTC: 0
+                    COMM_AV_BAL: 0
+                    COMM_ACT_BAL: 0
+                    COMM_ORIGIN:
+                      COMM_APPLID: 'EXAMPLE '
+                      COMM_USERID: 'LTD     '
+                      COMM_FACILITY_NAME: '        '
+                      COMM_NETWRK_ID: '        '
+                      COMM_FACILTYPE: 496
+                      FILL_0: '    '
+                    COMM_SUCCESS: ' '
+                    COMM_FAIL_CODE: ' '
+              credit:
+                summary: Credit (refund) example
+                value:
+                  PAYDBCR:
+                    COMM_ACCNO: '00000876'
+                    COMM_AMT: 10.99
+                    COMM_SORTC: 0
+                    COMM_AV_BAL: 0
+                    COMM_ACT_BAL: 0
+                    COMM_ORIGIN:
+                      COMM_APPLID: 'EXAMPLE '
+                      COMM_USERID: 'LTD     '
+                      COMM_FACILITY_NAME: '        '
+                      COMM_NETWRK_ID: '        '
+                      COMM_FACILTYPE: 496
+                      FILL_0: '    '
+                    COMM_SUCCESS: ' '
+                    COMM_FAIL_CODE: ' '
+      responses:
+        '200':
+          description: Payment processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+              examples:
+                success:
+                  summary: Successful payment
+                  value:
+                    PAYDBCR:
+                      COMM_ORIGIN:
+                        COMM_FACILTYPE: 496
+                        COMM_NETWRK_ID: ''
+                        COMM_APPLID: 'EXAMPLE'
+                        COMM_FACILITY_NAME: ''
+                        COMM_USERID: 'LTD'
+                        FILL_0: ''
+                      COMM_AV_BAL: 700382.9
+                      COMM_FAIL_CODE: '0'
+                      COMM_SORTC: 987654
+                      COMM_AMT: -10.99
+                      COMM_ACCNO: '00000876'
+                      COMM_ACT_BAL: 700382.9
+                      COMM_SUCCESS: 'Y'
+                accountNotFound:
+                  summary: Account not found
+                  value:
+                    PAYDBCR:
+                      COMM_ORIGIN:
+                        COMM_FACILTYPE: 496
+                        COMM_NETWRK_ID: ''
+                        COMM_APPLID: 'EXAMPLE'
+                        COMM_FACILITY_NAME: ''
+                        COMM_USERID: 'LTD'
+                        FILL_0: ''
+                      COMM_AV_BAL: 0
+                      COMM_FAIL_CODE: '1'
+                      COMM_SORTC: 987654
+                      COMM_AMT: -10.99
+                      COMM_ACCNO: '99999876'
+                      COMM_ACT_BAL: 0
+                      COMM_SUCCESS: 'N'
+                insufficientFunds:
+                  summary: Insufficient funds
+                  value:
+                    PAYDBCR:
+                      COMM_ORIGIN:
+                        COMM_FACILTYPE: 496
+                        COMM_NETWRK_ID: ''
+                        COMM_APPLID: 'EXAMPLE'
+                        COMM_FACILITY_NAME: ''
+                        COMM_USERID: 'LTD'
+                        FILL_0: ''
+                      COMM_AV_BAL: 0
+                      COMM_FAIL_CODE: '3'
+                      COMM_SORTC: 987654
+                      COMM_AMT: -10.99
+                      COMM_ACCNO: '00001490'
+                      COMM_ACT_BAL: 0
+                      COMM_SUCCESS: 'N'
+
+  /inqaccz/enquiry/{accountNumber}:
+    get:
+      tags:
+        - Account
+      summary: Enquire account details
+      description: |
+        Retrieves account details by account number.
+        
+        Backend COBOL program: INQACC
+        Copybook: INQACCZ
+      operationId: enquireAccount
+      parameters:
+        - name: accountNumber
+          in: path
+          required: true
+          description: Account number (8 digits)
+          schema:
+            type: string
+            pattern: '^\d{8}$'
+            example: '12345678'
+      responses:
+        '200':
+          description: Account details retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountEnquiryResponse'
+
+  /inqcustz/enquiry/{customerNumber}:
+    get:
+      tags:
+        - Customer
+      summary: Enquire customer details
+      description: |
+        Retrieves customer details by customer number.
+        
+        Backend COBOL program: INQCUST
+        Copybook: INQCUSTZ
+      operationId: enquireCustomer
+      parameters:
+        - name: customerNumber
+          in: path
+          required: true
+          description: Customer number (up to 10 digits)
+          schema:
+            type: string
+            pattern: '^\d{1,10}$'
+            example: '123'
+      responses:
+        '200':
+          description: Customer details retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerEnquiryResponse'
+
+  /inqacccz/list/{customerNumber}:
+    get:
+      tags:
+        - Account
+      summary: List customer accounts
+      description: |
+        Lists all accounts belonging to a customer.
+        
+        Backend COBOL program: INQACCZ
+        Copybook: INQACCCZ
+      operationId: listCustomerAccounts
+      parameters:
+        - name: customerNumber
+          in: path
+          required: true
+          description: Customer number (up to 10 digits)
+          schema:
+            type: string
+            pattern: '^\d{1,10}$'
+            example: '123'
+      responses:
+        '200':
+          description: List of customer accounts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountListResponse'
+
+  /creacc/insert:
+    post:
+      tags:
+        - Account
+      summary: Create account
+      description: |
+        Creates a new account for a customer.
+        
+        Backend COBOL program: CREACC
+        Copybook: CREACC
+        
+        Error codes:
+        - '1': Customer not found
+        - '8': Customer has too many accounts (max 10)
+        - 'A': Invalid account type
+      operationId: createAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAccountRequest'
+      responses:
+        '200':
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateAccountResponse'
+
+  /crecust/insert:
+    post:
+      tags:
+        - Customer
+      summary: Create customer
+      description: |
+        Creates a new customer.
+        
+        Backend COBOL program: CRECUST
+        Copybook: CRECUST
+        
+        This operation spawns 5 asynchronous credit check transactions (OCR1-OCR5).
+      operationId: createCustomer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCustomerRequest'
+      responses:
+        '200':
+          description: Customer created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateCustomerResponse'
+
+  /updacc/update:
+    put:
+      tags:
+        - Account
+      summary: Update account
+      description: |
+        Updates an existing account (type, interest rate, overdraft limit).
+        
+        Backend COBOL program: UPDACC
+        Copybook: UPDACC
+      operationId: updateAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAccountRequest'
+      responses:
+        '200':
+          description: Account updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateAccountResponse'
+
+  /updcust/update:
+    put:
+      tags:
+        - Customer
+      summary: Update customer
+      description: |
+        Updates an existing customer (name and address only).
+        
+        Backend COBOL program: UPDCUST
+        Copybook: UPDCUST
+      operationId: updateCustomer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCustomerRequest'
+      responses:
+        '200':
+          description: Customer updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateCustomerResponse'
+
+  /delacc/remove/{accountNumber}:
+    delete:
+      tags:
+        - Account
+      summary: Delete account
+      description: |
+        Deletes an account.
+        
+        Backend COBOL program: DELACC
+        Copybook: DELACC
+      operationId: deleteAccount
+      parameters:
+        - name: accountNumber
+          in: path
+          required: true
+          description: Account number (8 digits)
+          schema:
+            type: string
+            pattern: '^\d{8}$'
+            example: '12345678'
+      responses:
+        '200':
+          description: Account deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteAccountResponse'
+
+  /delcus/remove/{customerNumber}:
+    delete:
+      tags:
+        - Customer
+      summary: Delete customer
+      description: |
+        Deletes a customer and ALL their accounts.
+        
+        Backend COBOL program: DELCUS
+        Copybook: DELCUS
+      operationId: deleteCustomer
+      parameters:
+        - name: customerNumber
+          in: path
+          required: true
+          description: Customer number (up to 10 digits)
+          schema:
+            type: string
+            pattern: '^\d{1,10}$'
+            example: '123'
+      responses:
+        '200':
+          description: Customer deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteCustomerResponse'
+
+components:
+  schemas:
+    PaymentRequest:
+      type: object
+      required:
+        - PAYDBCR
+      properties:
+        PAYDBCR:
+          type: object
+          required:
+            - COMM_ACCNO
+            - COMM_AMT
+            - COMM_ORIGIN
+          properties:
+            COMM_ACCNO:
+              type: string
+              maxLength: 8
+              description: Account number (8 characters, zero-padded)
+            COMM_AMT:
+              type: number
+              format: decimal
+              description: Amount (negative for debit, positive for credit)
+              minimum: -9999999999.99
+              maximum: 9999999999.99
+            COMM_SORTC:
+              type: integer
+              description: Sort code (set to 0 in request)
+              minimum: 0
+              maximum: 999999
+            COMM_AV_BAL:
+              type: number
+              format: decimal
+              description: Available balance (set to 0 in request)
+            COMM_ACT_BAL:
+              type: number
+              format: decimal
+              description: Actual balance (set to 0 in request)
+            COMM_ORIGIN:
+              type: object
+              required:
+                - COMM_FACILTYPE
+              properties:
+                COMM_APPLID:
+                  type: string
+                  maxLength: 8
+                  description: Application ID / Organization name (first 8 chars)
+                COMM_USERID:
+                  type: string
+                  maxLength: 8
+                  description: User ID / Organization name (next 8 chars)
+                COMM_FACILITY_NAME:
+                  type: string
+                  maxLength: 8
+                  description: Facility name
+                COMM_NETWRK_ID:
+                  type: string
+                  maxLength: 8
+                  description: Network ID
+                COMM_FACILTYPE:
+                  type: integer
+                  description: Facility type (MUST be 496 for payment interface)
+                FILL_0:
+                  type: string
+                  maxLength: 4
+                  description: Filler field
+            COMM_SUCCESS:
+              type: string
+              maxLength: 1
+              description: Success indicator (leave blank in request)
+            COMM_FAIL_CODE:
+              type: string
+              maxLength: 1
+              description: Failure code (leave blank in request)
+
+    PaymentResponse:
+      type: object
+      properties:
+        PAYDBCR:
+          type: object
+          properties:
+            COMM_ACCNO:
+              type: string
+              maxLength: 8
+            COMM_AMT:
+              type: number
+              format: decimal
+            COMM_SORTC:
+              type: integer
+            COMM_AV_BAL:
+              type: number
+              format: decimal
+            COMM_ACT_BAL:
+              type: number
+              format: decimal
+            COMM_ORIGIN:
+              type: object
+              properties:
+                COMM_APPLID:
+                  type: string
+                  maxLength: 8
+                COMM_USERID:
+                  type: string
+                  maxLength: 8
+                COMM_FACILITY_NAME:
+                  type: string
+                  maxLength: 8
+                COMM_NETWRK_ID:
+                  type: string
+                  maxLength: 8
+                COMM_FACILTYPE:
+                  type: integer
+                FILL_0:
+                  type: string
+                  maxLength: 4
+            COMM_SUCCESS:
+              type: string
+              maxLength: 1
+              enum: ['Y', 'N']
+            COMM_FAIL_CODE:
+              type: string
+              maxLength: 1
+              enum: ['0', '1', '2', '3', '4']
+
+    AccountEnquiryResponse:
+      type: object
+      description: Account enquiry response with account details
+
+    CustomerEnquiryResponse:
+      type: object
+      description: Customer enquiry response with customer details
+
+    AccountListResponse:
+      type: object
+      description: List of accounts belonging to a customer
+
+    CreateAccountRequest:
+      type: object
+      description: Request to create a new account
+
+    CreateAccountResponse:
+      type: object
+      description: Response with created account details
+
+    CreateCustomerRequest:
+      type: object
+      description: Request to create a new customer
+
+    CreateCustomerResponse:
+      type: object
+      description: Response with created customer details
+
+    UpdateAccountRequest:
+      type: object
+      description: Request to update an account
+
+    UpdateAccountResponse:
+      type: object
+      description: Response with updated account details
+
+    UpdateCustomerRequest:
+      type: object
+      description: Request to update a customer
+
+    UpdateCustomerResponse:
+      type: object
+      description: Response with updated customer details
+
+    DeleteAccountResponse:
+      type: object
+      description: Response confirming account deletion
+
+    DeleteCustomerResponse:
+      type: object
+      description: Response confirming customer deletion
