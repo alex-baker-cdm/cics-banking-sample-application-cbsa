@@ -1,0 +1,698 @@
+openapi: 3.0.3
+info:
+  title: CICS Banking Sample Application - Customer Services Interface API
+  description: |
+    Web-based Customer Services Interface API for the CICS Banking Sample Application.
+    This Spring Boot application provides a web interface for bank branch staff to perform
+    customer and account operations through z/OS Connect.
+    
+    The interface is designed for use by bank branch staff on tablets to handle customer
+    transactions that don't involve cash or cheques (e.g., changing customer details,
+    closing accounts, account inquiries).
+    
+    This API integrates with z/OS Connect RESTful APIs to communicate with backend COBOL programs.
+  version: 1.0.0
+  contact:
+    name: CICS Banking Sample Application
+    url: https://github.com/cicsdev/cics-banking-sample-application-cbsa
+
+servers:
+  - url: http://localhost:19080/customerservices-1.0
+    description: Local development server
+  - url: http://{host}:{port}/customerservices-1.0
+    description: Configurable server
+    variables:
+      host:
+        default: localhost
+        description: Server hostname
+      port:
+        default: '19080'
+        description: Server port
+
+tags:
+  - name: Customer Services
+    description: Customer and account service operations
+
+paths:
+  /:
+    get:
+      tags:
+        - Customer Services
+      summary: Show customer services home page
+      description: Displays the main customer services interface page
+      operationId: showCustomerServices
+      responses:
+        '200':
+          description: Customer services home page
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /enqacct:
+    get:
+      tags:
+        - Customer Services
+      summary: Show account enquiry form
+      description: Displays the account enquiry form
+      operationId: showAccountEnquiryForm
+      responses:
+        '200':
+          description: Account enquiry form
+          content:
+            text/html:
+              schema:
+                type: string
+
+    post:
+      tags:
+        - Customer Services
+      summary: Enquire account details
+      description: |
+        Retrieves account details by account number via z/OS Connect API.
+        Calls: GET /inqaccz/enquiry/{accountNumber}
+      operationId: enquireAccount
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - acctNumber
+              properties:
+                acctNumber:
+                  type: string
+                  description: Account number to enquire
+                  pattern: '^\d{1,8}$'
+                  example: '12345678'
+      responses:
+        '200':
+          description: Account enquiry result
+          content:
+            text/html:
+              schema:
+                type: string
+        '400':
+          description: Invalid input
+          content:
+            text/html:
+              schema:
+                type: string
+        '404':
+          description: Account not found
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /enqcust:
+    get:
+      tags:
+        - Customer Services
+      summary: Show customer enquiry form
+      description: Displays the customer enquiry form
+      operationId: showCustomerEnquiryForm
+      responses:
+        '200':
+          description: Customer enquiry form
+          content:
+            text/html:
+              schema:
+                type: string
+
+    post:
+      tags:
+        - Customer Services
+      summary: Enquire customer details
+      description: |
+        Retrieves customer details by customer number via z/OS Connect API.
+        Calls: GET /inqcustz/enquiry/{customerNumber}
+      operationId: enquireCustomer
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - custNumber
+              properties:
+                custNumber:
+                  type: string
+                  description: Customer number to enquire
+                  pattern: '^\d{1,10}$'
+                  example: '123'
+      responses:
+        '200':
+          description: Customer enquiry result
+          content:
+            text/html:
+              schema:
+                type: string
+        '400':
+          description: Invalid input
+          content:
+            text/html:
+              schema:
+                type: string
+        '404':
+          description: Customer not found
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /listacc:
+    get:
+      tags:
+        - Customer Services
+      summary: Show list accounts form
+      description: Displays the form to list accounts by customer number
+      operationId: showListAccountsForm
+      responses:
+        '200':
+          description: List accounts form
+          content:
+            text/html:
+              schema:
+                type: string
+
+    post:
+      tags:
+        - Customer Services
+      summary: List customer accounts
+      description: |
+        Lists all accounts belonging to a customer via z/OS Connect API.
+        Calls: GET /inqacccz/list/{customerNumber}
+      operationId: listCustomerAccounts
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - custNumber
+              properties:
+                custNumber:
+                  type: string
+                  description: Customer number
+                  pattern: '^\d{1,10}$'
+                  example: '123'
+      responses:
+        '200':
+          description: List of customer accounts
+          content:
+            text/html:
+              schema:
+                type: string
+        '400':
+          description: Invalid input
+          content:
+            text/html:
+              schema:
+                type: string
+        '404':
+          description: Customer not found
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /createacc:
+    get:
+      tags:
+        - Customer Services
+      summary: Show create account form
+      description: Displays the account creation form with account type options
+      operationId: showCreateAccountForm
+      responses:
+        '200':
+          description: Create account form
+          content:
+            text/html:
+              schema:
+                type: string
+
+    post:
+      tags:
+        - Customer Services
+      summary: Create account
+      description: |
+        Creates a new account via z/OS Connect API.
+        Calls: POST /creacc/insert
+        
+        Error codes:
+        - 1: Customer not found
+        - 8: Customer has too many accounts (max 10)
+        - A: Invalid account type
+      operationId: createAccount
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - custNumber
+                - accountType
+                - interestRate
+                - overdraft
+              properties:
+                custNumber:
+                  type: string
+                  description: Customer number
+                  pattern: '^\d{1,10}$'
+                  example: '123'
+                accountType:
+                  type: string
+                  description: Account type
+                  enum: [ISA, SAVING, CURRENT, MORTGAGE, LOAN]
+                  example: 'CURRENT'
+                interestRate:
+                  type: number
+                  format: double
+                  description: Interest rate percentage
+                  example: 1.35
+                  minimum: 0
+                  maximum: 9999.99
+                overdraft:
+                  type: integer
+                  description: Overdraft limit
+                  example: 100
+                  minimum: 0
+      responses:
+        '200':
+          description: Account created successfully
+          content:
+            text/html:
+              schema:
+                type: string
+        '400':
+          description: Invalid input or customer has too many accounts
+          content:
+            text/html:
+              schema:
+                type: string
+        '404':
+          description: Customer not found
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /createcust:
+    get:
+      tags:
+        - Customer Services
+      summary: Show create customer form
+      description: Displays the customer creation form
+      operationId: showCreateCustomerForm
+      responses:
+        '200':
+          description: Create customer form
+          content:
+            text/html:
+              schema:
+                type: string
+
+    post:
+      tags:
+        - Customer Services
+      summary: Create customer
+      description: |
+        Creates a new customer via z/OS Connect API.
+        Calls: POST /crecust/insert
+        
+        This operation spawns 5 asynchronous credit check transactions.
+      operationId: createCustomer
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - title
+                - firstName
+                - lastName
+                - dateOfBirth
+                - houseNumber
+                - street
+                - town
+                - county
+                - country
+                - postcode
+              properties:
+                title:
+                  type: string
+                  description: Customer title
+                  enum: [Mr, Mrs, Miss, Ms, Dr]
+                  example: 'Mrs'
+                firstName:
+                  type: string
+                  description: First name
+                  example: 'Belinda'
+                lastName:
+                  type: string
+                  description: Last name
+                  example: 'Downton'
+                dateOfBirth:
+                  type: string
+                  format: date
+                  description: Date of birth
+                  example: '1996-07-04'
+                houseNumber:
+                  type: string
+                  description: House number
+                  example: '12'
+                street:
+                  type: string
+                  description: Street name
+                  example: 'Acacia Avenue'
+                town:
+                  type: string
+                  description: Town
+                  example: 'Oswestry'
+                county:
+                  type: string
+                  description: County
+                  example: 'Shropshire'
+                country:
+                  type: string
+                  description: Country
+                  example: 'UK'
+                postcode:
+                  type: string
+                  description: Postcode
+                  example: 'SY11 1AA'
+      responses:
+        '200':
+          description: Customer created successfully
+          content:
+            text/html:
+              schema:
+                type: string
+        '400':
+          description: Invalid input
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /updateacc:
+    get:
+      tags:
+        - Customer Services
+      summary: Show update account form
+      description: Displays the account update form
+      operationId: showUpdateAccountForm
+      responses:
+        '200':
+          description: Update account form
+          content:
+            text/html:
+              schema:
+                type: string
+
+    post:
+      tags:
+        - Customer Services
+      summary: Update account
+      description: |
+        Updates an existing account via z/OS Connect API.
+        Calls: PUT /updacc/update
+        
+        Only account type, interest rate, and overdraft limit can be updated.
+      operationId: updateAccount
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - accountNumber
+                - accountType
+                - interestRate
+                - overdraft
+              properties:
+                accountNumber:
+                  type: string
+                  description: Account number
+                  pattern: '^\d{1,8}$'
+                  example: '12345678'
+                accountType:
+                  type: string
+                  description: Account type
+                  enum: [ISA, SAVING, CURRENT, MORTGAGE, LOAN]
+                  example: 'MORTGAGE'
+                interestRate:
+                  type: number
+                  format: double
+                  description: Interest rate percentage
+                  example: 1.9
+                  minimum: 0
+                  maximum: 9999.99
+                overdraft:
+                  type: integer
+                  description: Overdraft limit
+                  example: 500
+                  minimum: 0
+      responses:
+        '200':
+          description: Account updated successfully
+          content:
+            text/html:
+              schema:
+                type: string
+        '400':
+          description: Invalid input
+          content:
+            text/html:
+              schema:
+                type: string
+        '404':
+          description: Account not found
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /updatecust:
+    get:
+      tags:
+        - Customer Services
+      summary: Show update customer form
+      description: Displays the customer update form
+      operationId: showUpdateCustomerForm
+      responses:
+        '200':
+          description: Update customer form
+          content:
+            text/html:
+              schema:
+                type: string
+
+    post:
+      tags:
+        - Customer Services
+      summary: Update customer
+      description: |
+        Updates an existing customer via z/OS Connect API.
+        Calls: PUT /updcust/update
+        
+        Only customer name and address can be updated.
+      operationId: updateCustomer
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - customerNumber
+                - title
+                - firstName
+                - lastName
+                - houseNumber
+                - street
+                - town
+                - county
+                - country
+                - postcode
+              properties:
+                customerNumber:
+                  type: string
+                  description: Customer number
+                  pattern: '^\d{1,10}$'
+                  example: '123'
+                title:
+                  type: string
+                  description: Customer title
+                  enum: [Mr, Mrs, Miss, Ms, Dr]
+                  example: 'Mrs'
+                firstName:
+                  type: string
+                  description: First name
+                  example: 'Belinda'
+                lastName:
+                  type: string
+                  description: Last name
+                  example: 'Downton'
+                houseNumber:
+                  type: string
+                  description: House number
+                  example: '12'
+                street:
+                  type: string
+                  description: Street name
+                  example: 'Acacia Avenue'
+                town:
+                  type: string
+                  description: Town
+                  example: 'Oswestry'
+                county:
+                  type: string
+                  description: County
+                  example: 'Shropshire'
+                country:
+                  type: string
+                  description: Country
+                  example: 'UK'
+                postcode:
+                  type: string
+                  description: Postcode
+                  example: 'SY11 1AA'
+      responses:
+        '200':
+          description: Customer updated successfully
+          content:
+            text/html:
+              schema:
+                type: string
+        '400':
+          description: Invalid input
+          content:
+            text/html:
+              schema:
+                type: string
+        '404':
+          description: Customer not found
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /delacct:
+    get:
+      tags:
+        - Customer Services
+      summary: Show delete account form
+      description: Displays the account deletion form
+      operationId: showDeleteAccountForm
+      responses:
+        '200':
+          description: Delete account form
+          content:
+            text/html:
+              schema:
+                type: string
+
+    post:
+      tags:
+        - Customer Services
+      summary: Delete account
+      description: |
+        Deletes an account via z/OS Connect API.
+        Calls: DELETE /delacc/remove/{accountNumber}
+      operationId: deleteAccount
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - accountNumber
+              properties:
+                accountNumber:
+                  type: string
+                  description: Account number to delete
+                  pattern: '^\d{1,8}$'
+                  example: '12345678'
+      responses:
+        '200':
+          description: Account deleted successfully
+          content:
+            text/html:
+              schema:
+                type: string
+        '404':
+          description: Account not found
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /delcust:
+    get:
+      tags:
+        - Customer Services
+      summary: Show delete customer form
+      description: Displays the customer deletion form
+      operationId: showDeleteCustomerForm
+      responses:
+        '200':
+          description: Delete customer form
+          content:
+            text/html:
+              schema:
+                type: string
+
+    post:
+      tags:
+        - Customer Services
+      summary: Delete customer
+      description: |
+        Deletes a customer and ALL their accounts via z/OS Connect API.
+        Calls: DELETE /delcus/remove/{customerNumber}
+      operationId: deleteCustomer
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - customerNumber
+              properties:
+                customerNumber:
+                  type: string
+                  description: Customer number to delete
+                  pattern: '^\d{1,10}$'
+                  example: '123'
+      responses:
+        '200':
+          description: Customer deleted successfully
+          content:
+            text/html:
+              schema:
+                type: string
+        '404':
+          description: Customer not found
+          content:
+            text/html:
+              schema:
+                type: string
+
+components:
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+          example: 'Customer not found'

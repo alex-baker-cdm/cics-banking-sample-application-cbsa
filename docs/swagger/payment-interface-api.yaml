@@ -1,0 +1,375 @@
+openapi: 3.0.3
+info:
+  title: CICS Banking Sample Application - Payment Interface API
+  description: |
+    Payment Interface API for the CICS Banking Sample Application.
+    This Spring Boot application provides a payment processing interface similar to a
+    debit/credit card machine for businesses to take payments or issue refunds directly
+    from customer bank accounts.
+    
+    The interface integrates with z/OS Connect RESTful APIs to communicate with backend
+    COBOL programs for payment processing.
+    
+    This API supports both web form-based payments and programmatic API access.
+  version: 1.1.0
+  contact:
+    name: CICS Banking Sample Application
+    url: https://github.com/cicsdev/cics-banking-sample-application-cbsa
+
+servers:
+  - url: http://localhost:19080/paymentinterface-1.1
+    description: Local development server
+  - url: http://{host}:{port}/paymentinterface-1.1
+    description: Configurable server
+    variables:
+      host:
+        default: localhost
+        description: Server hostname
+      port:
+        default: '19080'
+        description: Server port
+
+tags:
+  - name: Payment
+    description: Payment processing operations
+
+paths:
+  /:
+    get:
+      tags:
+        - Payment
+      summary: Show payment form
+      description: Displays the payment interface form
+      operationId: showPaymentForm
+      responses:
+        '200':
+          description: Payment form
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /paydbcr:
+    post:
+      tags:
+        - Payment
+      summary: Process payment or credit
+      description: |
+        Processes a payment (debit) or credit transaction via z/OS Connect API.
+        Calls: PUT /makepayment/dbcr
+        
+        Negative amounts represent debits (payments), positive amounts represent credits (refunds).
+        
+        Error codes:
+        - 1: Account not found
+        - 2: Problem with Db2
+        - 3: Insufficient funds
+        - 4: Invalid account type (LOAN or MORTGAGE accounts cannot be debited)
+      operationId: processPayment
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - acctNumber
+                - amount
+                - organisation
+              properties:
+                acctNumber:
+                  type: string
+                  description: Account number (will be zero-padded to 8 characters)
+                  pattern: '^\d{1,8}$'
+                  example: '876'
+                amount:
+                  type: number
+                  format: double
+                  description: |
+                    Amount to process.
+                    Positive for credit (refund), negative for debit (payment).
+                  example: -10.99
+                organisation:
+                  type: string
+                  description: |
+                    Organization name (up to 16 characters).
+                    Split into COMM_APPLID (first 8 chars) and COMM_USERID (next 8 chars).
+                  maxLength: 16
+                  example: 'EXAMPLE LTD'
+      responses:
+        '200':
+          description: Payment processed successfully
+          content:
+            text/html:
+              schema:
+                type: string
+        '400':
+          description: Invalid input, insufficient funds, or invalid account type
+          content:
+            text/html:
+              schema:
+                type: string
+        '404':
+          description: Account not found
+          content:
+            text/html:
+              schema:
+                type: string
+        '500':
+          description: Connection error or server error
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /submit:
+    post:
+      tags:
+        - Payment
+      summary: Submit payment programmatically
+      description: |
+        Programmatic API endpoint for payment submission (returns JSON instead of HTML).
+        Calls: PUT /makepayment/dbcr
+        
+        This endpoint is designed for integration with other applications.
+        
+        Error codes:
+        - 1: Account not found
+        - 2: Problem with Db2
+        - 3: Insufficient funds
+        - 4: Invalid account type (LOAN or MORTGAGE accounts cannot be debited)
+      operationId: submitPayment
+      parameters:
+        - name: acctnum
+          in: query
+          required: true
+          description: Account number (will be zero-padded to 8 characters)
+          schema:
+            type: string
+            pattern: '^\d{1,8}$'
+            example: '876'
+        - name: amount
+          in: query
+          required: true
+          description: |
+            Amount to process.
+            Positive for credit (refund), negative for debit (payment).
+          schema:
+            type: number
+            format: float
+            example: -10.99
+        - name: organisation
+          in: query
+          required: true
+          description: |
+            Organization name (up to 16 characters).
+            Split into COMM_APPLID (first 8 chars) and COMM_USERID (next 8 chars).
+          schema:
+            type: string
+            maxLength: 16
+            example: 'EXAMPLE LTD'
+      responses:
+        '200':
+          description: Payment processed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+        '400':
+          description: Invalid input, insufficient funds, or invalid account type
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+        '404':
+          description: Account not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+        '500':
+          description: Connection error or server error
+
+components:
+  schemas:
+    PaymentResponse:
+      type: object
+      properties:
+        PAYDBCR:
+          type: object
+          properties:
+            COMM_ACCNO:
+              type: string
+              description: Account number (8 characters)
+              maxLength: 8
+              example: '00000876'
+            COMM_AMT:
+              type: number
+              format: double
+              description: Transaction amount (negative for debit, positive for credit)
+              example: -10.99
+            COMM_SORTC:
+              type: integer
+              description: Bank sort code
+              minimum: 0
+              maximum: 999999
+              example: 987654
+            COMM_AV_BAL:
+              type: number
+              format: double
+              description: Available balance after transaction
+              example: 700382.9
+            COMM_ACT_BAL:
+              type: number
+              format: double
+              description: Actual balance after transaction
+              example: 700382.9
+            COMM_ORIGIN:
+              type: object
+              description: Transaction origin information
+              properties:
+                COMM_APPLID:
+                  type: string
+                  description: Application ID / Organization name (first 8 chars)
+                  maxLength: 8
+                  example: 'EXAMPLE'
+                COMM_USERID:
+                  type: string
+                  description: User ID / Organization name (next 8 chars)
+                  maxLength: 8
+                  example: 'LTD'
+                COMM_FACILITY_NAME:
+                  type: string
+                  description: Facility name
+                  maxLength: 8
+                  example: ''
+                COMM_NETWRK_ID:
+                  type: string
+                  description: Network ID
+                  maxLength: 8
+                  example: ''
+                COMM_FACILTYPE:
+                  type: integer
+                  description: Facility type (must be 496 for payment interface)
+                  example: 496
+                FILL_0:
+                  type: string
+                  description: Filler field
+                  maxLength: 4
+                  example: ''
+            COMM_SUCCESS:
+              type: string
+              description: Success indicator ('Y' for success, 'N' for failure)
+              enum: ['Y', 'N']
+              maxLength: 1
+              example: 'Y'
+            COMM_FAIL_CODE:
+              type: string
+              description: |
+                Failure code (when COMM_SUCCESS is 'N'):
+                - '0': Success
+                - '1': Account not found
+                - '2': Problem with Db2
+                - '3': Insufficient funds
+                - '4': Invalid account type (LOAN or MORTGAGE)
+              enum: ['0', '1', '2', '3', '4']
+              maxLength: 1
+              example: '0'
+
+    PaymentRequest:
+      type: object
+      required:
+        - PAYDBCR
+      properties:
+        PAYDBCR:
+          type: object
+          required:
+            - COMM_ACCNO
+            - COMM_AMT
+            - COMM_ORIGIN
+          properties:
+            COMM_ACCNO:
+              type: string
+              description: Account number (8 characters, zero-padded)
+              maxLength: 8
+              example: '00000876'
+            COMM_AMT:
+              type: number
+              format: double
+              description: |
+                Transaction amount.
+                Negative for debit (payment), positive for credit (refund).
+              example: -10.99
+              minimum: -9999999999.99
+              maximum: 9999999999.99
+            COMM_SORTC:
+              type: integer
+              description: Bank sort code (set to 0 in request)
+              minimum: 0
+              maximum: 999999
+              example: 0
+            COMM_AV_BAL:
+              type: number
+              format: double
+              description: Available balance (set to 0 in request)
+              example: 0
+            COMM_ACT_BAL:
+              type: number
+              format: double
+              description: Actual balance (set to 0 in request)
+              example: 0
+            COMM_ORIGIN:
+              type: object
+              required:
+                - COMM_APPLID
+                - COMM_USERID
+                - COMM_FACILTYPE
+              description: Transaction origin information
+              properties:
+                COMM_APPLID:
+                  type: string
+                  description: Application ID / Organization name (first 8 chars)
+                  maxLength: 8
+                  example: 'EXAMPLE '
+                COMM_USERID:
+                  type: string
+                  description: User ID / Organization name (next 8 chars)
+                  maxLength: 8
+                  example: 'LTD     '
+                COMM_FACILITY_NAME:
+                  type: string
+                  description: Facility name (leave blank)
+                  maxLength: 8
+                  example: '        '
+                COMM_NETWRK_ID:
+                  type: string
+                  description: Network ID (leave blank)
+                  maxLength: 8
+                  example: '        '
+                COMM_FACILTYPE:
+                  type: integer
+                  description: Facility type (MUST be 496 for payment interface)
+                  example: 496
+                FILL_0:
+                  type: string
+                  description: Filler field (leave blank)
+                  maxLength: 4
+                  example: '    '
+            COMM_SUCCESS:
+              type: string
+              description: Success indicator (leave blank in request)
+              maxLength: 1
+              example: ' '
+            COMM_FAIL_CODE:
+              type: string
+              description: Failure code (leave blank in request)
+              maxLength: 1
+              example: ' '
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+          example: 'Payment rejected: Account does not exist.'
