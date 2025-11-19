@@ -45,6 +45,8 @@ import com.ibm.cics.cip.bank.springboot.customerservices.jsonclasses.updateaccou
 import com.ibm.cics.cip.bank.springboot.customerservices.jsonclasses.updateaccount.UpdateAccountJson;
 import com.ibm.cics.cip.bank.springboot.customerservices.jsonclasses.updatecustomer.UpdateCustomerForm;
 import com.ibm.cics.cip.bank.springboot.customerservices.jsonclasses.updatecustomer.UpdateCustomerJson;
+import com.ibm.cics.cip.bank.springboot.customerservices.validators.CustomerUpdateValidator;
+import com.ibm.cics.cip.bank.springboot.customerservices.validators.exceptions.CustomerValidationException;
 
 // The code in this file is quite repetitive, however a case/swich block would've required too much over-engineering to do
 // Ideally I'd only need to send off one class and I'd only get either an account or customer object back to deserialise,
@@ -693,6 +695,21 @@ public class WebController implements WebMvcConfigurer
 	{
 		if (bindingResult.hasErrors())
 		{
+			return UPDATE_CUSTOMER_FORM;
+		}
+
+		CustomerUpdateValidator validator = new CustomerUpdateValidator();
+
+		try
+		{
+			validator.validateCustomerUpdate(updateCustomerForm, "", "");
+		}
+		catch (CustomerValidationException e)
+		{
+			log.info(e.toString());
+			model.addAttribute(LARGE_TEXT, "Validation Error");
+			model.addAttribute(SMALL_TEXT, e.getMessage());
+			model.addAttribute(RESULTS, true);
 			return UPDATE_CUSTOMER_FORM;
 		}
 
