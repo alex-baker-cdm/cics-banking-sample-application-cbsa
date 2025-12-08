@@ -1,0 +1,160 @@
+openapi: 3.0.3
+info:
+  title: CICS Banking Sample Application - Payment Interface API
+  description: |
+    REST API for the Payment Interface Spring Boot application in the CICS Banking
+    Sample Application (CBSA). This API provides a programmatic interface for
+    submitting payment transactions (debits and credits) to customer accounts.
+    
+    ## Base URL
+    The API is served at `/paymentinterface-1.1/` on port 19081.
+    
+    ## Integration
+    This API communicates with z/OS Connect EE to process payments via the
+    CICS COBOL programs. The z/OS Connect server runs on port 30701.
+    
+    ## Use Case
+    This interface is designed for external systems and applications that need
+    to programmatically submit payment transactions to the banking system.
+  version: 1.1.0
+  contact:
+    name: IBM CICS Team
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: http://localhost:19081/paymentinterface-1.1
+    description: Local development server
+
+tags:
+  - name: Payment
+    description: Payment submission operations
+
+paths:
+  /submit:
+    post:
+      tags:
+        - Payment
+      summary: Submit a payment transaction
+      description: |
+        Submits a debit or credit payment transaction to a customer account.
+        
+        The transaction type is determined by the amount:
+        - Positive amount: Credit (add money to account)
+        - Negative amount: Debit (subtract money from account)
+        
+        The payment is processed through z/OS Connect EE which communicates
+        with the CICS COBOL programs to update the account balance.
+      operationId: submitPayment
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PaymentSubmitRequest'
+      responses:
+        '200':
+          description: Payment processed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentInterfaceResponse'
+        '400':
+          description: Invalid input parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentInterfaceErrorResponse'
+        '500':
+          description: Internal server error or z/OS Connect communication failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentInterfaceErrorResponse'
+
+components:
+  schemas:
+    PaymentSubmitRequest:
+      type: object
+      required:
+        - acctNumber
+        - amount
+        - organisation
+      properties:
+        acctNumber:
+          type: string
+          description: |
+            Account number to process the payment for.
+            Must be a valid 8-digit account number.
+          example: "00000001"
+        amount:
+          type: number
+          format: decimal
+          description: |
+            Transaction amount:
+            - Positive value: Credit (add money to account)
+            - Negative value: Debit (subtract money from account)
+          example: 100.00
+        organisation:
+          type: string
+          description: |
+            Organisation or source identifier for the payment.
+            This is used for audit and tracking purposes.
+          example: "PAYROLL"
+
+    PaymentInterfaceResponse:
+      type: object
+      properties:
+        accountNumber:
+          type: string
+          description: Account number that was processed
+          example: "00000001"
+        sortCode:
+          type: string
+          description: Bank sort code
+          example: "987654"
+        actualBalance:
+          type: number
+          format: decimal
+          description: New actual balance after the transaction
+          example: 1600.00
+        availableBalance:
+          type: number
+          format: decimal
+          description: New available balance after the transaction
+          example: 1600.00
+        success:
+          type: boolean
+          description: Whether the payment was processed successfully
+          example: true
+        failCode:
+          type: string
+          description: |
+            Failure code if the payment failed:
+            - 1: Account not found
+            - 3: Insufficient funds (for debits)
+            - 4: Invalid account type
+          example: null
+
+    PaymentInterfaceErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: Always false for error responses
+          example: false
+        failCode:
+          type: string
+          description: |
+            Error code indicating the type of failure:
+            - 1: Account not found
+            - 3: Insufficient funds
+            - 4: Invalid account type
+            - CONNECTION_ERROR: Failed to connect to z/OS Connect
+            - VALIDATION_ERROR: Invalid input parameters
+          example: "1"
+        errorMessage:
+          type: string
+          description: Human-readable error message
+          example: "Account 00000001 not found"

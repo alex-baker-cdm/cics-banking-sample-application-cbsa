@@ -1,0 +1,1056 @@
+openapi: 3.0.3
+info:
+  title: CICS Banking Sample Application - z/OS Connect API
+  description: |
+    REST API exposed by z/OS Connect EE for the CICS Banking Sample Application (CBSA).
+    This API provides endpoints for customer and account management operations that
+    communicate with CICS COBOL programs via the IPIC protocol.
+    
+    ## Base URL
+    The API is served on port 30701 by the z/OS Connect server.
+    
+    ## Integration
+    These APIs are consumed by the Spring Boot applications:
+    - Customer Services Interface (`customerservices-1.0.war`)
+    - Payment Interface (`paymentinterface-1.1.war`)
+    
+    ## Communication
+    z/OS Connect communicates with CICS via IPIC protocol on port 30709.
+  version: 1.0.0
+  contact:
+    name: IBM CICS Team
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: http://localhost:30701
+    description: z/OS Connect server
+
+tags:
+  - name: Account Enquiry
+    description: Account inquiry operations
+  - name: Customer Enquiry
+    description: Customer inquiry operations
+  - name: Account Management
+    description: Account creation, update, and deletion
+  - name: Customer Management
+    description: Customer creation, update, and deletion
+  - name: Payment
+    description: Payment processing operations
+
+paths:
+  /inqaccz/enquiry/{accountNumber}:
+    get:
+      tags:
+        - Account Enquiry
+      summary: Enquire account by number
+      description: Retrieves account details for a specific account number.
+      operationId: enquireAccount
+      parameters:
+        - name: accountNumber
+          in: path
+          required: true
+          description: Account number to enquire
+          schema:
+            type: string
+            example: "00000001"
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountEnquiryResponse'
+
+  /inqcustz/enquiry/{customerNumber}:
+    get:
+      tags:
+        - Customer Enquiry
+      summary: Enquire customer by number
+      description: Retrieves customer details for a specific customer number.
+      operationId: enquireCustomer
+      parameters:
+        - name: customerNumber
+          in: path
+          required: true
+          description: Customer number to enquire
+          schema:
+            type: string
+            example: "0000000001"
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerEnquiryResponse'
+
+  /inqacccz/list/{customerNumber}:
+    get:
+      tags:
+        - Account Enquiry
+      summary: List accounts by customer
+      description: Retrieves all accounts belonging to a specific customer.
+      operationId: listAccountsByCustomer
+      parameters:
+        - name: customerNumber
+          in: path
+          required: true
+          description: Customer number
+          schema:
+            type: string
+            example: "0000000001"
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListAccountsResponse'
+
+  /creacc/insert:
+    post:
+      tags:
+        - Account Management
+      summary: Create account
+      description: Creates a new account for an existing customer.
+      operationId: createAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAccountRequest'
+      responses:
+        '200':
+          description: Account created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateAccountResponse'
+
+  /crecust/insert:
+    post:
+      tags:
+        - Customer Management
+      summary: Create customer
+      description: Creates a new customer record.
+      operationId: createCustomer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCustomerRequest'
+      responses:
+        '200':
+          description: Customer created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateCustomerResponse'
+
+  /updacc/update:
+    put:
+      tags:
+        - Account Management
+      summary: Update account
+      description: Updates an existing account's details.
+      operationId: updateAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAccountRequest'
+      responses:
+        '200':
+          description: Account updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateAccountResponse'
+
+  /updcust/update:
+    put:
+      tags:
+        - Customer Management
+      summary: Update customer
+      description: Updates an existing customer's details.
+      operationId: updateCustomer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCustomerRequest'
+      responses:
+        '200':
+          description: Customer updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateCustomerResponse'
+
+  /delacc/remove/{accountNumber}:
+    delete:
+      tags:
+        - Account Management
+      summary: Delete account
+      description: Deletes an existing account.
+      operationId: deleteAccount
+      parameters:
+        - name: accountNumber
+          in: path
+          required: true
+          description: Account number to delete
+          schema:
+            type: string
+            example: "00000001"
+      responses:
+        '200':
+          description: Account deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteAccountResponse'
+
+  /delcus/remove/{customerNumber}:
+    delete:
+      tags:
+        - Customer Management
+      summary: Delete customer
+      description: Deletes an existing customer and all associated accounts.
+      operationId: deleteCustomer
+      parameters:
+        - name: customerNumber
+          in: path
+          required: true
+          description: Customer number to delete
+          schema:
+            type: string
+            example: "0000000001"
+      responses:
+        '200':
+          description: Customer deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteCustomerResponse'
+
+  /makepayment/dbcr:
+    put:
+      tags:
+        - Payment
+      summary: Process debit/credit payment
+      description: |
+        Processes a debit or credit transaction on an account.
+        - Positive amount: Credit (add money)
+        - Negative amount: Debit (subtract money)
+      operationId: makePayment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentRequest'
+      responses:
+        '200':
+          description: Payment processed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+
+components:
+  schemas:
+    AccountEnquiryResponse:
+      type: object
+      properties:
+        INQACC_COMMAREA:
+          type: object
+          properties:
+            INQACC_EYE:
+              type: string
+              description: Eyecatcher field
+              example: "INQACC"
+            INQACC_CUSTNO:
+              type: integer
+              description: Customer number
+              example: 1
+            INQACC_SCODE:
+              type: string
+              description: Sort code
+              example: "987654"
+            INQACC_ACCNO:
+              type: integer
+              description: Account number
+              example: 1
+            INQACC_ACC_TYPE:
+              type: string
+              description: Account type
+              example: "SAVING"
+            INQACC_INT_RATE:
+              type: number
+              format: decimal
+              description: Interest rate
+              example: 2.50
+            INQACC_OPENED:
+              type: integer
+              description: Date opened (YYYYMMDD format)
+              example: 20240115
+            INQACC_OVERDRAFT:
+              type: integer
+              description: Overdraft limit
+              example: 1000
+            INQACC_LAST_STMT_DT:
+              type: integer
+              description: Last statement date (YYYYMMDD format)
+              example: 20241101
+            INQACC_NEXT_STMT_DT:
+              type: integer
+              description: Next statement date (YYYYMMDD format)
+              example: 20241201
+            INQACC_AVAIL_BAL:
+              type: number
+              format: decimal
+              description: Available balance
+              example: 1500.00
+            INQACC_ACTUAL_BAL:
+              type: number
+              format: decimal
+              description: Actual balance
+              example: 1500.00
+            INACC_SUCCESS:
+              type: string
+              description: Success indicator (Y/N)
+              example: "Y"
+            INQACC_PCB1:
+              type: string
+              description: PCB pointer 1
+            INQACC_PCB2:
+              type: string
+              description: PCB pointer 2
+            INQACC_PCB3:
+              type: string
+              description: PCB pointer 3
+
+    CustomerEnquiryResponse:
+      type: object
+      properties:
+        INQCUST_COMMAREA:
+          type: object
+          properties:
+            INQCUST_EYE:
+              type: string
+              description: Eyecatcher field
+              example: "INQCUST"
+            INQCUST_CUSTNO:
+              type: integer
+              description: Customer number
+              example: 1
+            INQCUST_SCODE:
+              type: string
+              description: Sort code
+              example: "987654"
+            INQCUST_NAME:
+              type: string
+              description: Customer name
+              example: "Mr John Smith"
+            INQCUST_ADDR:
+              type: string
+              description: Customer address
+              example: "123 Main Street, London"
+            INQCUST_DOB:
+              type: object
+              properties:
+                INQCUST_DOB_YYYY:
+                  type: integer
+                  description: Year of birth
+                  example: 1990
+                INQCUST_DOB_MM:
+                  type: integer
+                  description: Month of birth
+                  example: 1
+                INQCUST_DOB_DD:
+                  type: integer
+                  description: Day of birth
+                  example: 15
+            INQCUST_CREDIT_SCORE:
+              type: integer
+              description: Credit score
+              example: 750
+            INQCUST_CS_REVIEW_DATE:
+              type: object
+              properties:
+                INQCUST_CS_REVIEW_YYYY:
+                  type: integer
+                  description: Review year
+                  example: 2024
+                INQCUST_CS_REVIEW_MM:
+                  type: integer
+                  description: Review month
+                  example: 12
+                INQCUST_CS_REVIEW_DD:
+                  type: integer
+                  description: Review day
+                  example: 1
+            INQCUST_INQ_SUCCESS:
+              type: string
+              description: Success indicator (Y/N)
+              example: "Y"
+            INQCUST_INQ_FAIL_CD:
+              type: string
+              description: Failure code
+            INQCUST_PCB_POINTER1:
+              type: string
+              description: PCB pointer 1
+            INQCUST_PCB_POINTER2:
+              type: string
+              description: PCB pointer 2
+            INQCUST_PCB_POINTER3:
+              type: string
+              description: PCB pointer 3
+
+    ListAccountsResponse:
+      type: object
+      properties:
+        INQACCZ_COMMAREA:
+          type: object
+          properties:
+            INQACCZ_EYE:
+              type: string
+              description: Eyecatcher field
+              example: "INQACCZ"
+            CUSTOMER_NUMBER:
+              type: string
+              description: Customer number
+              example: "0000000001"
+            CUSTOMER_FOUND:
+              type: string
+              description: Customer found indicator (Y/N)
+              example: "Y"
+            NUMBER_OF_ACCOUNTS:
+              type: integer
+              description: Number of accounts
+              example: 3
+            ACCOUNT_DETAILS:
+              type: array
+              items:
+                type: object
+                properties:
+                  ACCOUNT_NUMBER:
+                    type: string
+                    description: Account number
+                    example: "00000001"
+                  ACCOUNT_SORT_CODE:
+                    type: string
+                    description: Sort code
+                    example: "987654"
+                  ACCOUNT_TYPE:
+                    type: string
+                    description: Account type
+                    example: "SAVING"
+                  ACCOUNT_INTEREST_RATE:
+                    type: number
+                    format: decimal
+                    description: Interest rate
+                    example: 2.50
+                  ACCOUNT_OPENED:
+                    type: integer
+                    description: Date opened (YYYYMMDD)
+                    example: 20240115
+                  ACCOUNT_OVERDRAFT_LIMIT:
+                    type: integer
+                    description: Overdraft limit
+                    example: 1000
+                  ACCOUNT_LAST_STATEMENT:
+                    type: integer
+                    description: Last statement date (YYYYMMDD)
+                    example: 20241101
+                  ACCOUNT_NEXT_STATEMENT:
+                    type: integer
+                    description: Next statement date (YYYYMMDD)
+                    example: 20241201
+                  ACCOUNT_AVAILABLE_BALANCE:
+                    type: number
+                    format: decimal
+                    description: Available balance
+                    example: 1500.00
+                  ACCOUNT_ACTUAL_BALANCE:
+                    type: number
+                    format: decimal
+                    description: Actual balance
+                    example: 1500.00
+
+    CreateAccountRequest:
+      type: object
+      properties:
+        CREACC_COMMAREA:
+          type: object
+          required:
+            - CREACC_CUSTNO
+            - CREACC_KEY
+            - CREACC_ACC_TYPE
+            - CREACC_INT_RATE
+            - CREACC_OVERDRAFT
+          properties:
+            CREACC_EYE:
+              type: string
+              description: Eyecatcher field
+              example: "CREACC"
+            CREACC_CUSTNO:
+              type: string
+              description: Customer number
+              example: "0000000001"
+            CREACC_KEY:
+              type: object
+              properties:
+                CREACC_SCODE:
+                  type: string
+                  description: Sort code
+                  example: "987654"
+                CREACC_ACCNO:
+                  type: integer
+                  description: Account number (0 for auto-generation)
+                  example: 0
+            CREACC_ACC_TYPE:
+              type: string
+              description: Account type (ISA, SAVING, CURRENT, MORTGAGE, LOAN)
+              example: "SAVING"
+            CREACC_INT_RATE:
+              type: number
+              format: decimal
+              description: Interest rate
+              example: 2.50
+            CREACC_OVERDRAFT:
+              type: integer
+              description: Overdraft limit
+              example: 1000
+
+    CreateAccountResponse:
+      type: object
+      properties:
+        CREACC_COMMAREA:
+          type: object
+          properties:
+            CREACC_EYE:
+              type: string
+              description: Eyecatcher field
+            CREACC_CUSTNO:
+              type: string
+              description: Customer number
+            CREACC_KEY:
+              type: object
+              properties:
+                CREACC_SCODE:
+                  type: string
+                  description: Sort code
+                CREACC_ACCNO:
+                  type: integer
+                  description: Assigned account number
+            CREACC_ACC_TYPE:
+              type: string
+              description: Account type
+            CREACC_INT_RATE:
+              type: number
+              format: decimal
+              description: Interest rate
+            CREACC_OPENED:
+              type: integer
+              description: Date opened (YYYYMMDD)
+            CREACC_OVERDRAFT:
+              type: integer
+              description: Overdraft limit
+            CREACC_LAST_STMT_DT:
+              type: integer
+              description: Last statement date
+            CREACC_NEXT_STMT_DT:
+              type: integer
+              description: Next statement date
+            CREACC_AVAIL_BAL:
+              type: number
+              format: decimal
+              description: Available balance
+            CREACC_ACTUAL_BAL:
+              type: number
+              format: decimal
+              description: Actual balance
+            COMM_SUCCESS:
+              type: string
+              description: Success indicator (Y/N)
+            COMM_FAIL_CODE:
+              type: string
+              description: |
+                Failure code:
+                - 1: Customer not found
+                - 8: Too many accounts (max 10)
+                - A: Invalid account type
+
+    CreateCustomerRequest:
+      type: object
+      properties:
+        CRECUST_COMMAREA:
+          type: object
+          required:
+            - CRECUST_NAME
+            - CRECUST_ADDRESS
+            - CRECUST_DATE_OF_BIRTH
+          properties:
+            CRECUST_EYE:
+              type: string
+              description: Eyecatcher field
+              example: "CRECUST"
+            CRECUST_CUSTNO:
+              type: string
+              description: Customer number (0 for auto-generation)
+              example: "0"
+            CRECUST_SCODE:
+              type: string
+              description: Sort code
+              example: "987654"
+            CRECUST_NAME:
+              type: string
+              description: Customer name (must start with valid title)
+              example: "Mr John Smith"
+            CRECUST_ADDRESS:
+              type: string
+              description: Customer address
+              example: "123 Main Street, London"
+            CRECUST_DATE_OF_BIRTH:
+              type: object
+              properties:
+                CRECUST_BIRTH_YEAR:
+                  type: integer
+                  description: Year of birth
+                  example: 1990
+                CRECUST_BIRTH_MONTH:
+                  type: integer
+                  description: Month of birth
+                  example: 1
+                CRECUST_BIRTH_DAY:
+                  type: integer
+                  description: Day of birth
+                  example: 15
+
+    CreateCustomerResponse:
+      type: object
+      properties:
+        CRECUST_COMMAREA:
+          type: object
+          properties:
+            CRECUST_EYE:
+              type: string
+              description: Eyecatcher field
+            CRECUST_CUSTNO:
+              type: string
+              description: Assigned customer number
+            CRECUST_SCODE:
+              type: string
+              description: Sort code
+            CRECUST_NAME:
+              type: string
+              description: Customer name
+            CRECUST_ADDRESS:
+              type: string
+              description: Customer address
+            CRECUST_DATE_OF_BIRTH:
+              type: object
+              properties:
+                CRECUST_BIRTH_YEAR:
+                  type: integer
+                CRECUST_BIRTH_MONTH:
+                  type: integer
+                CRECUST_BIRTH_DAY:
+                  type: integer
+            CRECUST_CREDIT_SCORE:
+              type: integer
+              description: Initial credit score
+            CRECUST_CS_REVIEW_DATE:
+              type: object
+              properties:
+                CRECUST_CS_REVIEW_YEAR:
+                  type: integer
+                CRECUST_CS_REVIEW_MONTH:
+                  type: integer
+                CRECUST_CS_REVIEW_DAY:
+                  type: integer
+            COMM_SUCCESS:
+              type: string
+              description: Success indicator (Y/N)
+            COMM_FAIL_CODE:
+              type: string
+              description: Failure code
+
+    UpdateAccountRequest:
+      type: object
+      properties:
+        UPDACC_COMMAREA:
+          type: object
+          required:
+            - UPDACC_ACCNO
+            - UPDACC_SCODE
+          properties:
+            UPDACC_EYE:
+              type: string
+              description: Eyecatcher field
+              example: "UPDACC"
+            UPDACC_ACCNO:
+              type: integer
+              description: Account number
+              example: 1
+            UPDACC_SCODE:
+              type: string
+              description: Sort code
+              example: "987654"
+            UPDACC_ACC_TYPE:
+              type: string
+              description: New account type
+              example: "CURRENT"
+            UPDACC_INT_RATE:
+              type: number
+              format: decimal
+              description: New interest rate
+              example: 3.00
+            UPDACC_OVERDRAFT:
+              type: integer
+              description: New overdraft limit
+              example: 2000
+
+    UpdateAccountResponse:
+      type: object
+      properties:
+        UPDACC_COMMAREA:
+          type: object
+          properties:
+            UPDACC_EYE:
+              type: string
+              description: Eyecatcher field
+            UPDACC_ACCNO:
+              type: integer
+              description: Account number
+            UPDACC_SCODE:
+              type: string
+              description: Sort code
+            UPDACC_CUSTNO:
+              type: integer
+              description: Customer number
+            UPDACC_ACC_TYPE:
+              type: string
+              description: Account type
+            UPDACC_INT_RATE:
+              type: number
+              format: decimal
+              description: Interest rate
+            UPDACC_OPENED:
+              type: integer
+              description: Date opened
+            UPDACC_OVERDRAFT:
+              type: integer
+              description: Overdraft limit
+            UPDACC_LAST_STMT_DT:
+              type: integer
+              description: Last statement date
+            UPDACC_NEXT_STMT_DT:
+              type: integer
+              description: Next statement date
+            UPDACC_AVAIL_BAL:
+              type: number
+              format: decimal
+              description: Available balance
+            UPDACC_ACTUAL_BAL:
+              type: number
+              format: decimal
+              description: Actual balance
+            UPDACC_SUCCESS:
+              type: string
+              description: Success indicator (Y/N)
+            UPDACC_FAIL_CD:
+              type: string
+              description: Failure code
+
+    UpdateCustomerRequest:
+      type: object
+      properties:
+        UPDCUST_COMMAREA:
+          type: object
+          required:
+            - UPDCUST_CUSTNO
+            - UPDCUST_SCODE
+          properties:
+            UPDCUST_EYE:
+              type: string
+              description: Eyecatcher field
+              example: "UPDCUST"
+            UPDCUST_CUSTNO:
+              type: integer
+              description: Customer number
+              example: 1
+            UPDCUST_SCODE:
+              type: string
+              description: Sort code
+              example: "987654"
+            UPDCUST_NAME:
+              type: string
+              description: New customer name
+              example: "Mr John Smith Jr"
+            UPDCUST_ADDRESS:
+              type: string
+              description: New customer address
+              example: "456 New Street, London"
+
+    UpdateCustomerResponse:
+      type: object
+      properties:
+        UPDCUST_COMMAREA:
+          type: object
+          properties:
+            UPDCUST_EYE:
+              type: string
+              description: Eyecatcher field
+            UPDCUST_CUSTNO:
+              type: integer
+              description: Customer number
+            UPDCUST_SCODE:
+              type: string
+              description: Sort code
+            UPDCUST_NAME:
+              type: string
+              description: Customer name
+            UPDCUST_ADDRESS:
+              type: string
+              description: Customer address
+            UPDCUST_DOB:
+              type: object
+              properties:
+                UPDCUST_DOB_YYYY:
+                  type: integer
+                UPDCUST_DOB_MM:
+                  type: integer
+                UPDCUST_DOB_DD:
+                  type: integer
+            UPDCUST_CREDIT_SCORE:
+              type: integer
+              description: Credit score
+            UPDCUST_CS_REVIEW_DT:
+              type: object
+              properties:
+                UPDCUST_CS_REVIEW_YYYY:
+                  type: integer
+                UPDCUST_CS_REVIEW_MM:
+                  type: integer
+                UPDCUST_CS_REVIEW_DD:
+                  type: integer
+            UPDCUST_SUCCESS:
+              type: string
+              description: Success indicator (Y/N)
+            UPDCUST_FAIL_CD:
+              type: string
+              description: Failure code
+
+    DeleteAccountResponse:
+      type: object
+      properties:
+        DELACC_COMMAREA:
+          type: object
+          properties:
+            DELACC_EYE:
+              type: string
+              description: Eyecatcher field
+            DELACC_ACCNO:
+              type: integer
+              description: Account number
+            DELACC_SCODE:
+              type: string
+              description: Sort code
+            DELACC_CUSTNO:
+              type: integer
+              description: Customer number
+            DELACC_ACC_TYPE:
+              type: string
+              description: Account type
+            DELACC_INT_RATE:
+              type: number
+              format: decimal
+              description: Interest rate
+            DELACC_OPENED:
+              type: integer
+              description: Date opened
+            DELACC_OVERDRAFT:
+              type: integer
+              description: Overdraft limit
+            DELACC_LAST_STMT_DT:
+              type: integer
+              description: Last statement date
+            DELACC_NEXT_STMT_DT:
+              type: integer
+              description: Next statement date
+            DELACC_AVAIL_BAL:
+              type: number
+              format: decimal
+              description: Available balance
+            DELACC_ACTUAL_BAL:
+              type: number
+              format: decimal
+              description: Actual balance
+            DELACC_SUCCESS:
+              type: string
+              description: Success indicator (Y/N)
+            DELACC_FAIL_CD:
+              type: string
+              description: Failure code
+            DELACC_DEL_PCB1:
+              type: string
+              description: PCB pointer 1
+            DELACC_DEL_PCB2:
+              type: string
+              description: PCB pointer 2
+            DELACC_DEL_PCB3:
+              type: string
+              description: PCB pointer 3
+
+    DeleteCustomerResponse:
+      type: object
+      properties:
+        DELCUS_COMMAREA:
+          type: object
+          properties:
+            DELCUS_EYE:
+              type: string
+              description: Eyecatcher field
+            DELCUS_CUSTNO:
+              type: integer
+              description: Customer number
+            DELCUS_SCODE:
+              type: string
+              description: Sort code
+            DELCUS_NAME:
+              type: string
+              description: Customer name
+            DELCUS_ADDRESS:
+              type: string
+              description: Customer address
+            DELCUS_DOB:
+              type: object
+              properties:
+                DELCUS_DOB_YYYY:
+                  type: integer
+                DELCUS_DOB_MM:
+                  type: integer
+                DELCUS_DOB_DD:
+                  type: integer
+            DELCUS_CREDIT_SCORE:
+              type: integer
+              description: Credit score
+            DELCUS_CS_REVIEW_DT:
+              type: object
+              properties:
+                DELCUS_CS_REVIEW_YYYY:
+                  type: integer
+                DELCUS_CS_REVIEW_MM:
+                  type: integer
+                DELCUS_CS_REVIEW_DD:
+                  type: integer
+            DELCUS_SUCCESS:
+              type: string
+              description: Success indicator (Y/N)
+            DELCUS_FAIL_CD:
+              type: string
+              description: Failure code
+            DELCUS_DEL_PCB1:
+              type: string
+              description: PCB pointer 1
+            DELCUS_DEL_PCB2:
+              type: string
+              description: PCB pointer 2
+            DELCUS_DEL_PCB3:
+              type: string
+              description: PCB pointer 3
+
+    PaymentRequest:
+      type: object
+      properties:
+        PAYDBCR_COMMAREA:
+          type: object
+          required:
+            - COMM_ACCNO
+            - COMM_AMT
+          properties:
+            COMM_EYE:
+              type: string
+              description: Eyecatcher field
+              example: "PAYDBCR"
+            COMM_SCODE:
+              type: string
+              description: Sort code
+              example: "987654"
+            COMM_ACCNO:
+              type: integer
+              description: Account number
+              example: 1
+            COMM_AMT:
+              type: number
+              format: decimal
+              description: |
+                Transaction amount:
+                - Positive value: Credit (add money)
+                - Negative value: Debit (subtract money)
+              example: 100.00
+            COMM_ORIGIN:
+              type: object
+              properties:
+                COMM_APPLID:
+                  type: string
+                  description: Application ID
+                  example: "PAYINT"
+                COMM_USERID:
+                  type: string
+                  description: User ID
+                COMM_FACILITY_NAME:
+                  type: string
+                  description: Facility name
+                COMM_NETWRK_ID:
+                  type: string
+                  description: Network ID
+                COMM_FACILTYPE:
+                  type: integer
+                  description: Facility type
+
+    PaymentResponse:
+      type: object
+      properties:
+        PAYDBCR_COMMAREA:
+          type: object
+          properties:
+            COMM_EYE:
+              type: string
+              description: Eyecatcher field
+            COMM_SCODE:
+              type: string
+              description: Sort code
+            COMM_ACCNO:
+              type: integer
+              description: Account number
+            COMM_AMT:
+              type: number
+              format: decimal
+              description: Transaction amount
+            COMM_AV_BAL:
+              type: number
+              format: decimal
+              description: New available balance
+            COMM_ACT_BAL:
+              type: number
+              format: decimal
+              description: New actual balance
+            COMM_SUCCESS:
+              type: string
+              description: Success indicator (Y/N)
+            COMM_FAIL_CODE:
+              type: string
+              description: |
+                Failure code:
+                - 1: Account not found
+                - 3: Insufficient funds
+                - 4: Invalid account type

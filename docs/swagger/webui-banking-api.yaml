@@ -1,0 +1,1497 @@
+openapi: 3.0.3
+info:
+  title: CICS Banking Sample Application - WebUI Banking API
+  description: |
+    REST API for the CICS Banking Sample Application (CBSA) Carbon React UI backend.
+    This API provides endpoints for managing customers, accounts, and transactions
+    in the banking application. The API is implemented using JAX-RS and runs on
+    WebSphere Liberty Profile within a CICS JVM server.
+    
+    ## Base URL
+    The API is served at `/webui-1.0/banking/` on port 19080.
+    
+    ## Authentication
+    This sample application does not implement authentication. In a production
+    environment, appropriate security measures should be implemented.
+    
+    ## Data Storage
+    - Customer data is stored in VSAM files
+    - Account and transaction data is stored in Db2 tables
+  version: 1.0.0
+  contact:
+    name: IBM CICS Team
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: http://localhost:19080/webui-1.0/banking
+    description: Local development server
+
+tags:
+  - name: Customer
+    description: Customer management operations
+  - name: Account
+    description: Account management operations
+  - name: Transaction
+    description: Transaction history and processing
+  - name: Counter
+    description: Counter management for generating IDs
+  - name: SortCode
+    description: Bank sort code retrieval
+  - name: CompanyName
+    description: Company name retrieval
+
+paths:
+  /customer:
+    get:
+      tags:
+        - Customer
+      summary: List all customers
+      description: Retrieves a list of customers with optional pagination and count-only mode.
+      operationId: getCustomers
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of customers to return (default 250000)
+          schema:
+            type: integer
+            default: 250000
+        - name: offset
+          in: query
+          description: Number of customers to skip (default 0)
+          schema:
+            type: integer
+            default: 0
+        - name: countOnly
+          in: query
+          description: If true, only return the count of customers
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerListResponse'
+        '404':
+          description: Customers cannot be listed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags:
+        - Customer
+      summary: Create a new customer
+      description: Creates a new customer record. The customer name must start with a valid title (Mr, Mrs, Miss, Ms, Dr, Drs, Professor, Lord, Sir, Lady).
+      operationId: createCustomer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerInput'
+      responses:
+        '201':
+          description: Customer created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResponse'
+        '400':
+          description: Invalid input (invalid title, sort code, or missing required fields)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /customer/{id}:
+    get:
+      tags:
+        - Customer
+      summary: Get customer by ID
+      description: Retrieves a specific customer by their customer number.
+      operationId: getCustomer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Customer number
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResponse'
+        '404':
+          description: Customer not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      tags:
+        - Customer
+      summary: Update customer
+      description: Updates an existing customer's information.
+      operationId: updateCustomer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Customer number
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomerInput'
+      responses:
+        '200':
+          description: Customer updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Customer not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+        - Customer
+      summary: Delete customer
+      description: Deletes a customer and all associated accounts.
+      operationId: deleteCustomer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Customer number
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Customer deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerResponse'
+        '404':
+          description: Customer not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /customer/all/town/{town}:
+    get:
+      tags:
+        - Customer
+      summary: Get customers by town
+      description: Retrieves all customers whose address contains the specified town.
+      operationId: getCustomersByTown
+      parameters:
+        - name: town
+          in: path
+          required: true
+          description: Town name to search for
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CustomerResponse'
+
+  /customer/all/surname/{surname}:
+    get:
+      tags:
+        - Customer
+      summary: Get customers by surname
+      description: Retrieves all customers with the specified surname.
+      operationId: getCustomersBySurname
+      parameters:
+        - name: surname
+          in: path
+          required: true
+          description: Surname to search for
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CustomerResponse'
+
+  /customer/all/age/{age}:
+    get:
+      tags:
+        - Customer
+      summary: Get customers by age
+      description: Retrieves all customers of the specified age.
+      operationId: getCustomersByAge
+      parameters:
+        - name: age
+          in: path
+          required: true
+          description: Age to search for
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerListResponse'
+
+  /customer/name:
+    get:
+      tags:
+        - Customer
+      summary: Get customers by name
+      description: Retrieves customers matching the specified name with pagination.
+      operationId: getCustomersByName
+      parameters:
+        - name: name
+          in: query
+          required: true
+          description: Name to search for
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum number of customers to return
+          schema:
+            type: integer
+        - name: offset
+          in: query
+          description: Number of customers to skip
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerListResponse'
+
+  /account:
+    get:
+      tags:
+        - Account
+      summary: List all accounts
+      description: Retrieves a list of accounts with optional pagination and count-only mode.
+      operationId: getAccounts
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of accounts to return (default 250000)
+          schema:
+            type: integer
+            default: 250000
+        - name: offset
+          in: query
+          description: Number of accounts to skip (default 0)
+          schema:
+            type: integer
+            default: 0
+        - name: countOnly
+          in: query
+          description: If true, only return the count of accounts
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountListResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags:
+        - Account
+      summary: Create a new account
+      description: |
+        Creates a new account for an existing customer. Each customer can have
+        a maximum of 10 accounts. Valid account types are: ISA, SAVING, CURRENT,
+        MORTGAGE, LOAN.
+      operationId: createAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountInput'
+      responses:
+        '201':
+          description: Account created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountResponse'
+        '400':
+          description: Invalid input or customer has too many accounts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Customer not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /account/{accountNumber}:
+    get:
+      tags:
+        - Account
+      summary: Get account by number
+      description: Retrieves a specific account by its account number.
+      operationId: getAccount
+      parameters:
+        - name: accountNumber
+          in: path
+          required: true
+          description: Account number
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountResponse'
+        '404':
+          description: Account not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      tags:
+        - Account
+      summary: Update account
+      description: Updates an existing account's information (interest rate, type, overdraft limit).
+      operationId: updateAccount
+      parameters:
+        - name: accountNumber
+          in: path
+          required: true
+          description: Account number
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountInput'
+      responses:
+        '200':
+          description: Account updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountResponse'
+        '400':
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Account not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+        - Account
+      summary: Delete account
+      description: Deletes an account.
+      operationId: deleteAccount
+      parameters:
+        - name: accountNumber
+          in: path
+          required: true
+          description: Account number
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Account deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountResponse'
+        '404':
+          description: Account not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /account/retrieveByCustomerNumber/{customerNumber}:
+    get:
+      tags:
+        - Account
+      summary: Get accounts by customer number
+      description: Retrieves all accounts belonging to a specific customer.
+      operationId: getAccountsByCustomer
+      parameters:
+        - name: customerNumber
+          in: path
+          required: true
+          description: Customer number
+          schema:
+            type: integer
+            format: int64
+        - name: countOnly
+          in: query
+          description: If true, only return the count of accounts
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerAccountsResponse'
+        '404':
+          description: Customer not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /account/debit/{id}:
+    put:
+      tags:
+        - Account
+      summary: Debit account
+      description: Subtracts money from an account.
+      operationId: debitAccount
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Account number
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DebitCreditInput'
+      responses:
+        '200':
+          description: Debit successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DebitCreditResponse'
+        '404':
+          description: Account not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /account/credit/{id}:
+    put:
+      tags:
+        - Account
+      summary: Credit account
+      description: Adds money to an account.
+      operationId: creditAccount
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Account number
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DebitCreditInput'
+      responses:
+        '200':
+          description: Credit successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DebitCreditResponse'
+        '404':
+          description: Account not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /account/transfer/{id}:
+    put:
+      tags:
+        - Account
+      summary: Transfer funds
+      description: Transfers money between two accounts at the same bank.
+      operationId: transferLocal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Source account number
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferInput'
+      responses:
+        '200':
+          description: Transfer successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransferResponse'
+        '400':
+          description: Invalid input (same source and target account)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Account not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /account/balance:
+    get:
+      tags:
+        - Account
+      summary: Get accounts by balance
+      description: Retrieves accounts filtered by balance using comparison operators.
+      operationId: getAccountsByBalance
+      parameters:
+        - name: balance
+          in: query
+          required: true
+          description: Balance threshold
+          schema:
+            type: number
+            format: decimal
+        - name: operator
+          in: query
+          required: true
+          description: Comparison operator (< or >)
+          schema:
+            type: string
+            enum: ['<', '>', '<=', '>=']
+        - name: offset
+          in: query
+          description: Number of accounts to skip
+          schema:
+            type: integer
+            default: 0
+        - name: limit
+          in: query
+          description: Maximum number of accounts to return
+          schema:
+            type: integer
+            default: 250000
+        - name: countOnly
+          in: query
+          description: If true, only return the count of accounts
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountListResponse'
+        '400':
+          description: Invalid operator
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /processedTransaction:
+    get:
+      tags:
+        - Transaction
+      summary: Get processed transactions
+      description: Retrieves a list of processed transactions with optional pagination.
+      operationId: getProcessedTransactions
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of transactions to return (default 250000)
+          schema:
+            type: integer
+            default: 250000
+        - name: offset
+          in: query
+          description: Number of transactions to skip (default 0)
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProcessedTransactionListResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /processedTransaction/debitCreditAccount:
+    post:
+      tags:
+        - Transaction
+      summary: Write debit/credit transaction
+      description: Records a debit or credit transaction to the PROCTRAN table.
+      operationId: writeDebitCredit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessedTransactionDebitCreditInput'
+      responses:
+        '200':
+          description: Transaction recorded successfully
+        '500':
+          description: Internal server error
+
+  /processedTransaction/transferLocal:
+    post:
+      tags:
+        - Transaction
+      summary: Write transfer transaction
+      description: Records a local transfer transaction to the PROCTRAN table.
+      operationId: writeTransferLocal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessedTransactionTransferInput'
+      responses:
+        '200':
+          description: Transaction recorded successfully
+        '500':
+          description: Internal server error
+
+  /processedTransaction/deleteCustomer:
+    post:
+      tags:
+        - Transaction
+      summary: Write delete customer transaction
+      description: Records a customer deletion transaction to the PROCTRAN table.
+      operationId: writeDeleteCustomer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessedTransactionCustomerInput'
+      responses:
+        '200':
+          description: Transaction recorded successfully
+        '500':
+          description: Internal server error
+
+  /processedTransaction/createCustomer:
+    post:
+      tags:
+        - Transaction
+      summary: Write create customer transaction
+      description: Records a customer creation transaction to the PROCTRAN table.
+      operationId: writeCreateCustomer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessedTransactionCustomerInput'
+      responses:
+        '200':
+          description: Transaction recorded successfully
+        '500':
+          description: Internal server error
+
+  /processedTransaction/deleteAccount:
+    post:
+      tags:
+        - Transaction
+      summary: Write delete account transaction
+      description: Records an account deletion transaction to the PROCTRAN table.
+      operationId: writeDeleteAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessedTransactionAccountInput'
+      responses:
+        '200':
+          description: Transaction recorded successfully
+        '500':
+          description: Internal server error
+
+  /processedTransaction/createAccount:
+    post:
+      tags:
+        - Transaction
+      summary: Write create account transaction
+      description: Records an account creation transaction to the PROCTRAN table.
+      operationId: writeCreateAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProcessedTransactionAccountInput'
+      responses:
+        '200':
+          description: Transaction recorded successfully
+        '500':
+          description: Internal server error
+
+  /counter/account:
+    get:
+      tags:
+        - Counter
+      summary: Get account counter
+      description: Retrieves the current account number counter value.
+      operationId: getAccountCounter
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountCounterResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags:
+        - Counter
+      summary: Increment account counter
+      description: Increments the account number counter and returns the new value.
+      operationId: incrementAccountCounter
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountCounterResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+        - Counter
+      summary: Decrement account counter
+      description: Decrements the account number counter and returns the new value.
+      operationId: decrementAccountCounter
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountCounterResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /counter/customer:
+    get:
+      tags:
+        - Counter
+      summary: Get customer counter
+      description: Retrieves the current customer number counter value.
+      operationId: getCustomerCounter
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerCounterResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      tags:
+        - Counter
+      summary: Increment customer counter
+      description: Increments the customer number counter and returns the new value.
+      operationId: incrementCustomerCounter
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerCounterResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+        - Counter
+      summary: Decrement customer counter
+      description: Decrements the customer number counter and returns the new value.
+      operationId: decrementCustomerCounter
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerCounterResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /sortCode:
+    get:
+      tags:
+        - SortCode
+      summary: Get bank sort code
+      description: Retrieves the bank's sort code.
+      operationId: getSortCode
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SortCodeResponse'
+        '500':
+          description: Internal server error
+
+  /companyName:
+    get:
+      tags:
+        - CompanyName
+      summary: Get company name
+      description: Retrieves the bank's company name.
+      operationId: getCompanyName
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompanyNameResponse'
+        '500':
+          description: Internal server error
+
+components:
+  schemas:
+    CustomerInput:
+      type: object
+      required:
+        - customerName
+        - customerAddress
+        - dateOfBirth
+        - sortCode
+      properties:
+        customerName:
+          type: string
+          description: Customer's full name (must start with valid title - Mr, Mrs, Miss, Ms, Dr, Drs, Professor, Lord, Sir, Lady)
+          example: "Mr John Smith"
+        customerAddress:
+          type: string
+          description: Customer's address
+          example: "123 Main Street, London"
+        dateOfBirth:
+          type: string
+          format: date
+          description: Customer's date of birth
+          example: "1990-01-15"
+        sortCode:
+          type: string
+          description: Bank sort code (6 digits)
+          example: "987654"
+
+    CustomerResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Customer number
+          example: "0000000001"
+        sortCode:
+          type: string
+          description: Bank sort code
+          example: "987654"
+        customerName:
+          type: string
+          description: Customer's full name
+          example: "Mr John Smith"
+        customerAddress:
+          type: string
+          description: Customer's address
+          example: "123 Main Street, London"
+        dateOfBirth:
+          type: string
+          description: Customer's date of birth
+          example: "Jan 15, 1990"
+        customerCreditScore:
+          type: string
+          description: Customer's credit score
+          example: "750"
+        customerCreditScoreReviewDate:
+          type: string
+          description: Date when credit score was last reviewed
+          example: "Dec 1, 2024"
+
+    CustomerListResponse:
+      type: object
+      properties:
+        numberOfCustomers:
+          type: integer
+          description: Total number of customers
+          example: 100
+        customers:
+          type: array
+          items:
+            $ref: '#/components/schemas/CustomerResponse'
+
+    AccountInput:
+      type: object
+      required:
+        - accountType
+        - customerNumber
+        - sortCode
+        - overdraft
+        - interestRate
+      properties:
+        accountType:
+          type: string
+          description: Type of account
+          enum: [ISA, SAVING, CURRENT, MORTGAGE, LOAN]
+          example: "SAVING"
+        customerNumber:
+          type: string
+          description: Customer number who owns the account
+          example: "0000000001"
+        sortCode:
+          type: string
+          description: Bank sort code
+          example: "987654"
+        overdraft:
+          type: integer
+          description: Overdraft limit (must be >= 0)
+          example: 1000
+        interestRate:
+          type: number
+          format: decimal
+          description: Interest rate (0.00 to 9999.99, max 2 decimal places)
+          example: 2.50
+
+    AccountResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Account number
+          example: "00000001"
+        sortCode:
+          type: string
+          description: Bank sort code
+          example: "987654"
+        customerNumber:
+          type: string
+          description: Customer number
+          example: "0000000001"
+        accountType:
+          type: string
+          description: Type of account
+          example: "SAVING"
+        availableBalance:
+          type: number
+          format: decimal
+          description: Available balance
+          example: 1500.00
+        actualBalance:
+          type: number
+          format: decimal
+          description: Actual balance
+          example: 1500.00
+        interestRate:
+          type: number
+          format: decimal
+          description: Interest rate
+          example: 2.50
+        overdraft:
+          type: integer
+          description: Overdraft limit
+          example: 1000
+        lastStatementDate:
+          type: string
+          description: Date of last statement
+          example: "2024-11-01"
+        nextStatementDate:
+          type: string
+          description: Date of next statement
+          example: "2024-12-01"
+        dateOpened:
+          type: string
+          description: Date account was opened
+          example: "2024-01-15"
+
+    AccountListResponse:
+      type: object
+      properties:
+        numberOfAccounts:
+          type: integer
+          description: Total number of accounts
+          example: 50
+        accounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountResponse'
+
+    CustomerAccountsResponse:
+      type: object
+      properties:
+        customerNumber:
+          type: string
+          description: Customer number
+          example: "0000000001"
+        numberOfAccounts:
+          type: integer
+          description: Number of accounts for this customer
+          example: 3
+        accounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccountResponse'
+
+    DebitCreditInput:
+      type: object
+      required:
+        - amount
+      properties:
+        amount:
+          type: number
+          format: decimal
+          description: Amount to debit or credit
+          example: 100.00
+
+    DebitCreditResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Account number
+          example: "00000001"
+        sortCode:
+          type: string
+          description: Bank sort code
+          example: "987654"
+        availableBalance:
+          type: number
+          format: decimal
+          description: New available balance
+          example: 1400.00
+        actualBalance:
+          type: number
+          format: decimal
+          description: New actual balance
+          example: 1400.00
+        interestRate:
+          type: number
+          format: decimal
+          description: Interest rate
+          example: 2.50
+
+    TransferInput:
+      type: object
+      required:
+        - amount
+        - targetAccount
+      properties:
+        amount:
+          type: number
+          format: decimal
+          description: Amount to transfer (must be positive)
+          example: 100.00
+        targetAccount:
+          type: integer
+          description: Target account number
+          example: 12345678
+
+    TransferResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Source account number
+          example: "00000001"
+        sortCode:
+          type: string
+          description: Bank sort code
+          example: "987654"
+        availableBalance:
+          type: number
+          format: decimal
+          description: New available balance of source account
+          example: 1400.00
+        actualBalance:
+          type: number
+          format: decimal
+          description: New actual balance of source account
+          example: 1400.00
+
+    ProcessedTransactionResponse:
+      type: object
+      properties:
+        sortCode:
+          type: string
+          description: Bank sort code
+          example: "987654"
+        accountNumber:
+          type: string
+          description: Account number
+          example: "00000001"
+        amount:
+          type: number
+          format: decimal
+          description: Transaction amount
+          example: 100.00
+        timestamp:
+          type: string
+          description: Transaction timestamp
+          example: "Dec 8, 2024, 10:30:00 AM"
+        description:
+          type: string
+          description: Transaction description
+          example: "Direct Debit"
+        type:
+          type: string
+          description: Transaction type (CRE, DEB, TFR, IDC, ICC, IDA, ICA)
+          example: "DEB"
+        reference:
+          type: string
+          description: Transaction reference
+          example: "REF123456"
+        targetAccount:
+          type: string
+          description: Target account (for transfers)
+        targetSortcode:
+          type: string
+          description: Target sort code (for transfers)
+        accountType:
+          type: string
+          description: Account type (for account create/delete)
+        lastStatement:
+          type: string
+          description: Last statement date (for account create/delete)
+        nextStatement:
+          type: string
+          description: Next statement date (for account create/delete)
+        customer:
+          type: string
+          description: Customer number
+        customerName:
+          type: string
+          description: Customer name (for customer create/delete)
+        dateOfBirth:
+          type: string
+          description: Date of birth (for customer create/delete)
+
+    ProcessedTransactionListResponse:
+      type: object
+      properties:
+        numberOfProcessedTransactionRecords:
+          type: integer
+          description: Total number of transaction records
+          example: 1000
+        processedTransactions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProcessedTransactionResponse'
+        success:
+          type: string
+          description: Success indicator
+          example: "Y"
+
+    ProcessedTransactionDebitCreditInput:
+      type: object
+      properties:
+        accountNumber:
+          type: string
+          description: Account number
+        sortCode:
+          type: string
+          description: Sort code
+        amount:
+          type: number
+          format: decimal
+          description: Transaction amount
+
+    ProcessedTransactionTransferInput:
+      type: object
+      properties:
+        accountNumber:
+          type: string
+          description: Source account number
+        sortCode:
+          type: string
+          description: Sort code
+        amount:
+          type: number
+          format: decimal
+          description: Transfer amount
+        targetAccountNumber:
+          type: string
+          description: Target account number
+
+    ProcessedTransactionCustomerInput:
+      type: object
+      properties:
+        accountNumber:
+          type: string
+          description: Account number
+        sortCode:
+          type: string
+          description: Sort code
+        customerDOB:
+          type: string
+          format: date
+          description: Customer date of birth
+        customerName:
+          type: string
+          description: Customer name
+        customerNumber:
+          type: string
+          description: Customer number
+
+    ProcessedTransactionAccountInput:
+      type: object
+      properties:
+        accountNumber:
+          type: string
+          description: Account number
+        sortCode:
+          type: string
+          description: Sort code
+        type:
+          type: string
+          description: Account type
+        customerNumber:
+          type: string
+          description: Customer number
+        lastStatement:
+          type: string
+          format: date
+          description: Last statement date
+        nextStatement:
+          type: string
+          format: date
+          description: Next statement date
+        actualBalance:
+          type: number
+          format: decimal
+          description: Actual balance
+
+    AccountCounterResponse:
+      type: object
+      properties:
+        accountNumber:
+          type: integer
+          description: Current account number counter value
+          example: 12345678
+        success:
+          type: string
+          description: Success indicator (Y/N)
+          example: "Y"
+
+    CustomerCounterResponse:
+      type: object
+      properties:
+        customerNumber:
+          type: integer
+          description: Current customer number counter value
+          example: 1000
+        success:
+          type: string
+          description: Success indicator (Y/N)
+          example: "Y"
+
+    SortCodeResponse:
+      type: object
+      properties:
+        sortCode:
+          type: string
+          description: Bank sort code
+          example: "987654"
+
+    CompanyNameResponse:
+      type: object
+      properties:
+        companyName:
+          type: string
+          description: Bank company name
+          example: "CICS Banking Sample Application"
+
+    ErrorResponse:
+      type: object
+      properties:
+        errorMessage:
+          type: string
+          description: Error message describing what went wrong
+          example: "Customer 12345 not found"
