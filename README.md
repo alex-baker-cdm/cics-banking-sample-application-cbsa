@@ -54,6 +54,7 @@ The interfaces are designed to exploit the underlying banking functionality, whi
 ## Requirements
 - An existing CICS TS region running at V6.1 with APAR PH60795 applied, or later
 - A Db2 subsystem (V12 or later)
+- Enterprise COBOL V6.4 or later
 - A Liberty JVM server in CICS (set up and configured during the installation process) for the Carbon React UI and Spring Boot interfaces
 - Java 17
 - Yarn to build the web front-end

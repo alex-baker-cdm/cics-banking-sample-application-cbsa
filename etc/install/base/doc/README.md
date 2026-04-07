@@ -16,6 +16,8 @@ installer already has:
 
 -   a Db2 subsystem (v12 or greater)
 
+-   Enterprise COBOL V6.4 or later
+
 -   a z/OS Connect server.
 
 These instructions detail the steps required to:
