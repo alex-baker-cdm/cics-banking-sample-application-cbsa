@@ -6,6 +6,10 @@ We welcome bug reports, discussions about new function, and suggested updates to
 
 You should read these guidelines to help you contribute.
 
+## Development Environment
+
+The COBOL programs in this project require Enterprise COBOL V6.4 or later to compile.
+
 ## Reporting a bug
 
 Please raise bugs by raising a new issue using the Issues tab. When raising bugs, first check whether an issue for your problem already exists. Then try to give a good indication of the exact circumstances that provoked the bug. What were you doing? What did you expect to happen? What actually happened? What logs or other material can you provide to show the problem?

@@ -34,6 +34,8 @@ The base/COBOL installation assumes that the installer has:
 
 -   A Db2 subsystem (v12 or greater)
 
+-   Enterprise COBOL V6.4 or later
+
 -   A z/OS Connect server
 
 For the CBSA base offering the CICS region does not need to have a JVM

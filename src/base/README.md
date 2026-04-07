@@ -14,6 +14,7 @@ You can use the CICS bank sample application to explore the following:
 
 * CICS Transaction Server V5.4 or later
 * IBM Db2 V12 or later
+* Enterprise COBOL V6.4 or later
 
 ## Application architecture
 
