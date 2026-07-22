@@ -33,6 +33,8 @@
       *     RDUPD    keyed READ ... UPDATE (remembers the key for REWRITE)
       *     REWRITE  overwrite the record last read for update
       *     WRITE    insert a new record (keyed by RIDFLD)
+      *     DELETE   remove the record last read for update (TOKEN/UPDATE
+      *              semantics), or the record named by RIDFLD if supplied
       *     STARTBR  open a browse positioned at/around RIDFLD
       *     READNEXT next record in ascending key order
       *     READPREV previous record in descending key order
@@ -110,6 +112,13 @@
 
        01 WS-FORCED-RESP          PIC S9(8) COMP VALUE -1.
 
+      * Sinks used when the caller omits RESP / RESP2 (e.g. CRECUST's
+      * CUSTOMER-control READ ... UPDATE and REWRITE take neither). The
+      * omitted linkage items are re-pointed here so the body can MOVE to
+      * LK-RESP / LK-RESP2 unconditionally.
+       01 WS-RESP-SINK            PIC S9(8) COMP VALUE 0.
+       01 WS-RESP2-SINK           PIC S9(8) COMP VALUE 0.
+
        01 WS-BEST-IX              PIC 9(4)     VALUE 0.
        01 WS-HIT-IX               PIC 9(4)     VALUE 0.
        01 WS-FCOUNT               PIC 9(4)     VALUE 0.
@@ -126,9 +135,16 @@
 
        PROCEDURE DIVISION USING LK-OP LK-FILE
                                 OPTIONAL LK-RID OPTIONAL LK-REC
-                                LK-RESP LK-RESP2.
+                                OPTIONAL LK-RESP OPTIONAL LK-RESP2.
        A010.
            PERFORM ENSURE-INIT
+
+           IF LK-RESP IS OMITTED
+              SET ADDRESS OF LK-RESP TO ADDRESS OF WS-RESP-SINK
+           END-IF
+           IF LK-RESP2 IS OMITTED
+              SET ADDRESS OF LK-RESP2 TO ADDRESS OF WS-RESP2-SINK
+           END-IF
 
       *    Driver-only control ops never set RESP through the normal path.
            EVALUATE LK-OP
@@ -170,6 +186,8 @@
                  PERFORM DO-REWRITE
               WHEN 'WRITE   '
                  PERFORM DO-WRITE
+              WHEN 'DELETE  '
+                 PERFORM DO-DELETE
               WHEN 'STARTBR '
                  PERFORM DO-STARTBR
               WHEN 'READNEXT'
@@ -353,6 +371,36 @@
                  MOVE 1 TO LK-RESP
               END-IF
            END-IF.
+
+      *    DELETE removes the record identified by the update TOKEN (the
+      *    record last READ ... UPDATE, as DELCUS does), or by RIDFLD when
+      *    a key is supplied directly.
+       DO-DELETE.
+           MOVE SPACES TO WS-BOUND
+           IF LK-RID IS NOT OMITTED
+              AND LK-RID(1:WS-CUR-KEYLEN) NOT = SPACES
+              MOVE LK-RID(1:WS-CUR-KEYLEN) TO WS-BOUND(1:WS-CUR-KEYLEN)
+           ELSE
+              IF WS-UPD-SET NOT = 'Y' OR WS-UPD-FILE NOT = WS-CUR-FILE
+                 MOVE WS-RESP-NOTFND TO LK-RESP
+                 GO TO DO-DELETE-EXIT
+              END-IF
+              MOVE WS-UPD-KEY(1:WS-CUR-KEYLEN)
+                   TO WS-BOUND(1:WS-CUR-KEYLEN)
+           END-IF
+           PERFORM FIND-BY-KEY
+           IF WS-HIT-IX > 0
+              MOVE 'N'    TO WS-SLOT-USED(WS-HIT-IX)
+              MOVE SPACES TO WS-SLOT-FILE(WS-HIT-IX)
+              MOVE SPACES TO WS-SLOT-KEY(WS-HIT-IX)
+              MOVE SPACES TO WS-SLOT-DATA(WS-HIT-IX)
+              SUBTRACT 1 FROM WS-COUNT
+           ELSE
+              MOVE WS-RESP-NOTFND TO LK-RESP
+           END-IF
+           MOVE 'N' TO WS-UPD-SET.
+       DO-DELETE-EXIT.
+           EXIT.
 
       *-----------------------------------------------------------------
        DO-STARTBR.

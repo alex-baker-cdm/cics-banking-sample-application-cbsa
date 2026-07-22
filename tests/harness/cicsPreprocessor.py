@@ -51,11 +51,24 @@ import sys
 DFHRESP_MAP = {
     "NORMAL": 0,
     "NOTFND": 13,
+    "INVREQ": 16,
     "DUPREC": 14,
     "DUPKEY": 15,
     "ENDFILE": 20,
     "MAPFAIL": 36,
     "SYSIDERR": 53,
+    "NOTFINISHED": 82,
+}
+
+# DFHVALUE(name) -> numeric CVDA value. Used by CRECUST's FETCH ANY
+# COMPSTATUS EVALUATE. The absolute values are irrelevant off-CICS as long
+# as they are internally consistent with what the CICSASYN double sets, so
+# NORMAL is 0 (CICSASYN returns 0 for a good completion) and the rest are
+# distinct sentinels.
+DFHVALUE_MAP = {
+    "NORMAL": 0,
+    "ABEND": 1,
+    "SECERROR": 2,
 }
 
 # Harness scratch fields injected into WORKING-STORAGE for verbs that must
@@ -69,7 +82,8 @@ SCRATCH_VERBS = ("SEND", "RECEIVE", "LINK", "BIF")
 
 # EXEC CICS file-control verbs routed to the CICSVSAM KSDS test double.
 VSAM_FILE_VERBS = (
-    "READ", "REWRITE", "WRITE", "STARTBR", "READNEXT", "READPREV", "ENDBR",
+    "READ", "REWRITE", "WRITE", "DELETE",
+    "STARTBR", "READNEXT", "READPREV", "ENDBR",
 )
 
 # Indentation (Area B, column 12) for generated statements.
@@ -188,7 +202,9 @@ def _vsam_call(verb, body, ops, period):
         rec = "OMITTED"
     return _call("CICSVSAM",
                  contents=["'{}'".format(op.ljust(8)), fileLit],
-                 refs=[rid, rec, ops["RESP"], ops["RESP2"]],
+                 refs=[rid, rec,
+                       ops.get("RESP", "OMITTED"),
+                       ops.get("RESP2", "OMITTED")],
                  period=period)
 
 
@@ -342,6 +358,33 @@ def _translate_block(text, period):
                            ops["FLENGTH"], ops["RESP"], ops["RESP2"]],
                      period=period)
 
+    if verb == "RUN":
+        # RUN TRANSID(..) CHANNEL(..) CHILD(..): the CICS Async API. Emulated
+        # synchronously by CICSASYN (see the shim + README) - it records the
+        # child token/channel and overlays the scripted credit score into the
+        # channel container so the parent's later GET CONTAINER reads it. The
+        # uniform positional signature is shared with FETCH ANY (operands a
+        # given verb lacks are passed OMITTED):
+        #   op(8) transid channel child anytkn compstatus abcode resp resp2
+        return _call("CICSASYN",
+                     contents=["'RUN     '"],
+                     refs=[ops["TRANSID"], ops["CHANNEL"], ops["CHILD"],
+                           "OMITTED", "OMITTED", "OMITTED",
+                           ops.get("RESP", "OMITTED"),
+                           ops.get("RESP2", "OMITTED")],
+                     period=period)
+
+    if verb == "FETCH" and "ANY" in ops:
+        # FETCH ANY(..): hands back one completed child at a time, then
+        # RESP=NOTFND/RESP2=1 once all scripted replies are consumed.
+        return _call("CICSASYN",
+                     contents=["'FETCH   '"],
+                     refs=["OMITTED", ops["CHANNEL"], "OMITTED",
+                           ops["ANY"], ops["COMPSTATUS"], ops["ABCODE"],
+                           ops.get("RESP", "OMITTED"),
+                           ops.get("RESP2", "OMITTED")],
+                     period=period)
+
     if verb == "LINK":
         # PROGRAM may be a literal ('INQCUST ') or a data name; pass BY
         # CONTENT so both work. The COMMAREA (BY REFERENCE) is preceded by
@@ -477,6 +520,15 @@ def _replace_dfhresp(line):
     return re.sub(r"DFHRESP\(([A-Za-z0-9]+)\)", repl, line)
 
 
+def _replace_dfhvalue(line):
+    """Replace DFHVALUE(NAME) with its numeric value, padded to equal width."""
+    def repl(m):
+        name = m.group(1).upper()
+        val = DFHVALUE_MAP.get(name, 0)
+        return str(val).ljust(len(m.group(0)))
+    return re.sub(r"DFHVALUE\(([A-Za-z0-9]+)\)", repl, line)
+
+
 def _is_comment(line):
     return len(line) > CODE_START and line[CODE_START - 1] in ("*", "/")
 
@@ -519,6 +571,15 @@ def translate(lines):
         line = lines[i].rstrip("\n")
 
         if _is_comment(line):
+            out.append(line)
+            i += 1
+            continue
+
+        # Fixed-format debugging lines ('D'/'d' in the indicator area) are
+        # ignored by the compiler unless WITH DEBUGGING MODE is active (it is
+        # not here). Pass them through verbatim so we never try to translate
+        # an EXEC embedded in a debugging line (e.g. CRECUST's START-DEQ one).
+        if len(line) >= CODE_START and line[CODE_START - 1] in ("D", "d"):
             out.append(line)
             i += 1
             continue
@@ -595,8 +656,8 @@ def translate(lines):
             continue
 
         # Ordinary line: perform in-place, width-preserving substitutions.
-        if "DFHRESP(" in code:
-            fixed = _replace_dfhresp(code)
+        if "DFHRESP(" in code or "DFHVALUE(" in code:
+            fixed = _replace_dfhvalue(_replace_dfhresp(code))
             line = line[:CODE_START] + fixed + line[MARGIN_R:]
         out.append(line)
         i += 1

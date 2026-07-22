@@ -89,7 +89,10 @@ test driver.
 | `CICSINIT` | (EIB init, injected)                | Sets `EIBRESP/EIBRESP2=0`, `EIBTRNID=spaces`, and `EIBTASKN` from `CBSA_TEST_TASKN` (default 1) — makes the RNG seed injectable. |
 | `CICSCONT` | `GET CONTAINER`, `PUT CONTAINER`    | Process-resident container store keyed by name; `resp=0` on hit, `resp=1` (CONTAINERERR) on a GET miss. |
 | `CICSDLAY` | `DELAY`                             | No-op by default (`resp=0`); set `CBSA_TEST_DELAY_MODE=real` to actually sleep. |
-| `CICSLINK` | `LINK PROGRAM(..) COMMAREA(..)`     | Records the LINK; for `PROGRAM('INQCUST ')` returns a **valid customer** (`INQCUST-INQ-SUCCESS='Y'`) — force not-found with `CBSA_TEST_INQCUST_SUCCESS=N`. For `PROGRAM('INQACCCU')` returns a customer **account count** (`NUMBER-OF-ACCOUNTS`) so programs that enforce the max-accounts-per-customer rule can proceed: `CBSA_TEST_INQACCCU_COUNT` (default 1) and `CBSA_TEST_INQACCCU_SUCCESS` (default Y). |
+| `CICSLINK` | `LINK PROGRAM(..) COMMAREA(..)`     | Generalized LINK double. `PROGRAM('INQCUST ')` returns a **valid customer** (`INQCUST-INQ-SUCCESS='Y'`); force not-found with `CBSA_TEST_INQCUST_SUCCESS=N` or the `LNKINQOK` driver op. `PROGRAM('INQACCCU')` returns the customer's **account count** in `NUMBER-OF-ACCOUNTS` — `CBSA_TEST_INQACCCU_COUNT` (default = scripted-list count) / `CBSA_TEST_INQACCCU_SUCCESS` (default Y) drive the max-accounts rule, and a driver-scripted account list (`LNKADDAC`) fills the ODO account array. `PROGRAM('DELACC  ')` captures each account key passed so a driver can assert the cascade. Every other program (a screen's single business LINK — `DBCRFUN`/`CREACC`/`XFRFUN` — plus `ABNDPROC`) is forwarded to the `LINKREC` store. See "Generalized LINK — `CICSLINK`" below. |
+| `CICSASYN` | `RUN TRANSID(..) CHANNEL(..) CHILD(..)`, `FETCH ANY(..)` | Deterministic **synchronous** stand-in for CICS asynchronous child transactions (CRECUST's credit checks). See "Async credit-check emulation — `CICSASYN`" below. |
+| `CEEDAYS`  | LE `CEEDAYS` (date → Lilian days)   | Deterministic date-to-days stand-in (LE service unavailable off-z/OS). |
+| `CEELOCT`  | LE `CEELOCT` (current local time)   | Returns a fixed Lilian/Gregorian date/time for deterministic review-date stamping. |
 | `CICSASGN` | `ASSIGN APPLID/PROGRAM/ABCODE(..)`  | Returns canned values (error-path only). |
 | `CICSABND` | `ABEND ABCODE(..)`                  | **Records the last abend code** in process-resident state so a driver can assert which failure path fired. The preprocessor emits `CALL 'CICSABND' … 'ABEND' abcode` **followed by `GOBACK`** so control cannot run past a translated ABEND. See "CICS abend capture" below. |
 | `CICSTIME` | `ASKTIME ABSTIME(..)`               | Returns a fixed ABSTIME (error-path only). |
@@ -110,8 +113,9 @@ test driver.
 **CICS verbs stubbed so far:** `DELAY`, `GET CONTAINER`, `PUT CONTAINER`,
 `RETURN`, `LINK`, `ASSIGN` (APPLID/PROGRAM/ABCODE), `ABEND`, `ASKTIME`,
 `FORMATTIME`, `HANDLE ABEND` (disabled to a no-op), `SYNCPOINT`, `ENQ`, `DEQ`,
-and the VSAM file-control verbs `READ`, `READ UPDATE`, `REWRITE`, `WRITE`,
-`STARTBR`, `READNEXT`, `READPREV`, `ENDBR`. **`EXEC SQL`** against `ACCOUNT`
+`RUN TRANSID ... CHANNEL ... CHILD`, `FETCH ANY`, and the VSAM file-control
+verbs `READ`, `READ UPDATE`, `REWRITE`, `WRITE`, `DELETE`, `STARTBR`,
+`READNEXT`, `READPREV`, `ENDBR`. **`EXEC SQL`** against `ACCOUNT`
 (SELECT / UPDATE / DELETE / cursor / INSERT), `CONTROL` (keyed SELECT / UPDATE),
 and `INSERT INTO PROCTRAN` are also supported (see the Db2 sections below). The
 **BMS / 3270 presentation** verbs `SEND MAP`, `RECEIVE MAP`, `SEND TEXT`,
@@ -355,6 +359,93 @@ So a driver asserts a failure path by `RESET`-ing, calling the program, then
 `FROM`/`TO  ` (account update failed), `HROL` (rollback failed), `WPCD`
 (PROCTRAN write failed), `HWPT` (DELACC PROCTRAN write failed). See
 `tests/unit/xfrfunTest.cbl` for the `SAME` capture.
+
+### Generalized LINK — `CICSLINK`
+
+The customer orchestrators `LINK` to three sub-programs. `CICSLINK` emulates all
+three from one module (dispatched on the `PROGRAM` name it is passed) and lets a
+driver both **script** the results and **inspect** what was passed:
+
+- **`INQCUST`** — validates a customer exists. Returns success by default;
+  a driver forces not-found either with `CBSA_TEST_INQCUST_SUCCESS=N` or the
+  `LNKINQOK` control op (so a single run can flip it per sub-test).
+- **`INQACCCU`** — enumerates a customer's accounts. The double fills the
+  program's ODO account array (`NUMBER-OF-ACCOUNTS` + `ACCOUNT-DETAILS`) from a
+  driver-scripted list of account numbers (each carrying the fixed sort code
+  `987654`).
+- **`DELACC`** — deletes one account. The double **captures the account number**
+  from each COMMAREA it is handed, in call order, so the driver can assert the
+  cascade fired once per account with the right keys.
+
+Driver-only control ops (signature `USING op ctrl`, where `ctrl` is a small
+group `{inqOk PIC X, nAcc PIC 9(4), idx PIC 9(4), accNo PIC 9(8)}`):
+
+| op         | Effect |
+|------------|--------|
+| `LNKRESET` | Clear the scripted account list, the DELACC captures, and INQCUST state. |
+| `LNKADDAC` | Append `accNo` to the scripted `INQACCCU` account list. |
+| `LNKINQOK` | Set INQCUST success to `inqOk` (`Y`/`N`). |
+| `LNKGETCN` | Return the DELACC capture count in `nAcc`. |
+| `LNKGETAC` | Return the captured account number at 1-based `idx` in `accNo`. |
+
+See `tests/unit/delcusTest.cbl`: it scripts three accounts, calls `DELCUS`, then
+asserts `LNKGETCN`=3 and each `LNKGETAC` matches the scripted key in order, that
+the CUSTOMER record is gone, and that one `ODC` PROCTRAN row was written. The
+customer-not-found edge (`LNKINQOK` with `N`) asserts **nothing** was deleted
+and no audit row written.
+
+### Async credit-check emulation — `CICSASYN`
+
+CRECUST runs its five credit-agency checks (`CRDTAGY1`-`5`) **asynchronously**:
+for each child it `PUT`s a container on channel `CIPCREDCHANN`, then
+`EXEC CICS RUN TRANSID(OCRn) CHANNEL(..) CHILD(token)` to start the child
+transaction, and later `EXEC CICS FETCH ANY(..)` in a loop to gather the
+completed children and average their scores.
+
+**Off-mainframe simplification (documented).** Genuine asynchronous child tasks
+cannot be reproduced in a single GnuCOBOL run unit, so `CICSASYN` emulates the
+whole thing **synchronously and deterministically**:
+
+- On `RUN`, it takes the child container that CRECUST just `PUT` on the channel
+  (via `CICSCONT`), **overlays a fixed scripted credit score** into the child
+  record (offset 249, `PIC 999`), puts it back, and queues a completion token.
+- On `FETCH ANY`, it returns the queued children **in issue order** with
+  `COMPSTATUS = DFHVALUE(NORMAL)`; when the queue drains it returns `NOTFND`
+  with `RESP2=1`, ending CRECUST's fetch loop exactly as real CICS would.
+
+Because the scores are driver-supplied, the aggregate CRECUST computes is fully
+deterministic. Driver-only control ops (signature matches the emitted
+`RUN`/`FETCH` call, `op` in the first operand):
+
+| op         | Effect |
+|------------|--------|
+| `RESET`    | Clear scripted scores and the completion queue. |
+| `SETSCORE` | Script the score a given child (1..5, via the transid slot) returns. |
+| `SETNORPL` | Suppress a child's reply (it never appears in `FETCH`), to drive the "fewer replies than started" path. |
+
+`tests/unit/crecustTest.cbl` scripts scores `100/200/300/400/500` and asserts
+CRECUST stores their average `300`, that the next customer number is allocated
+from the seeded CUSTOMER **control record** (`READ UPDATE`+`REWRITE`, so it is
+incremented `100`→`101` and count `5`→`6`), that the new CUSTOMER record is
+written, and that one `OCC` PROCTRAN row is produced. The edge test feeds an
+invalid date of birth (year `1500`) and asserts `COMM-SUCCESS='N'`, fail code
+`O`, and that **no** CUSTOMER record / audit row / control-record change
+resulted.
+
+### Locking + LE date services — off-mainframe simplifications
+
+- **`CICSENQ` (`ENQ`/`DEQ`).** CRECUST serializes named-counter allocation with
+  `ENQ`/`DEQ`. Off-CICS everything runs in one run unit, so the double is a
+  no-op returning `resp=0` — the allocation logic is unchanged, just
+  uncontended.
+- **`CEEDAYS` / `CEELOCT` (Language Environment).** CRECUST calls these LE
+  callable services to compute the credit-score review date. They do not exist
+  off-z/OS, so deterministic stand-ins return fixed values (`CEELOCT` a fixed
+  "today", `CEEDAYS` a monotonic day count), keeping the review-date stamping
+  deterministic. A test-only copy of `CEEIGZCT` (the LE feedback-code copybook)
+  lives under `tests/harness/copy/` because it is not in the product copy tree;
+  the include path is `-I tests/harness/copy -I src/base/cobol_copy`, so
+  test-only copybooks resolve first without touching the product ones.
 
 ### Known gap — `BANKDATA` (not yet testable)
 
