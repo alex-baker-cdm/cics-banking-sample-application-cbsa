@@ -104,6 +104,11 @@ SQLCA_FIELD = "SQLCA"
 # in a group with this name; the INSERT translation passes it to DB2PROC.
 PROC_ROW_GROUP = "HOST-PROCTRAN-ROW"
 
+# CONTROL-table programs (CREACC) hold their three Db2 CONTROL host variables
+# (name, numeric value, string value) in a group with this name; the CONTROL
+# SELECT/UPDATE translation passes it to the DB2CTRL double.
+CTRL_ROW_GROUP = "HOST-CONTROL-ROW"
+
 
 def _operands(text):
     """Return an ordered dict-like list of ``KEYWORD(value)`` operands."""
@@ -217,6 +222,21 @@ def _db2proc_call(op, period):
     )
 
 
+def _db2ctrl_call(op, period):
+    """Build a CALL to the DB2CTRL (CONTROL table) double.
+
+    Fixed positional signature:
+        CALL 'DB2CTRL' USING BY CONTENT op(8)
+             BY REFERENCE HOST-CONTROL-ROW SQLCA
+    """
+    return _call(
+        "DB2CTRL",
+        contents=["'{}'".format(op.ljust(8))],
+        refs=[CTRL_ROW_GROUP, SQLCA_FIELD],
+        period=period,
+    )
+
+
 def _translate_block(text, period):
     """Translate a single flattened ``EXEC CICS ...`` block into COBOL lines."""
     body = text.split("CICS", 1)[1].strip()
@@ -235,6 +255,17 @@ def _translate_block(text, period):
     if verb == "SYNCPOINT":
         return _call("CICSSYNC",
                      refs=[ops["RESP"], ops["RESP2"]],
+                     period=period)
+
+    if verb in ("ENQ", "DEQ"):
+        # ENQ/DEQ serialise the account named-counter on the mainframe. In a
+        # single-process test the resource is always uncontended, so the
+        # CICSENQ double is a no-op that reports NORMAL. RESP/RESP2 may be
+        # absent on some callers -> pass OMITTED so the shim skips them.
+        return _call("CICSENQ",
+                     contents=["'{}'".format(verb.ljust(8))],
+                     refs=[ops.get("RESP", "OMITTED"),
+                           ops.get("RESP2", "OMITTED")],
                      period=period)
 
     if verb == "RETURN":
@@ -393,13 +424,20 @@ def _translate_sql_block(text, period, ctx):
             ctx["cursor_mode"]))]
 
     if verb == "SELECT" and "INTO" in upper:
-        # Two shapes: a keyed single-row SELECT, or the "last account"
-        # SELECT (ORDER BY ACCOUNT_NUMBER DESC FETCH FIRST 1 ROW).
+        # The CONTROL table (CREACC's named-counter row) is served by the
+        # DB2CTRL double, keyed on CONTROL_NAME.
+        if re.search(r"\bFROM\s+CONTROL\b", upper):
+            return _db2ctrl_call("SELKEY", period)
+        # ACCOUNT SELECTs have two shapes: a keyed single-row SELECT, or the
+        # "last account" SELECT (ORDER BY ACCOUNT_NUMBER DESC FETCH FIRST 1).
         if "ORDER BY" in upper and "DESC" in upper:
             return _db2_call("SELMAX", period)
         return _db2_call("SELKEY", period)
 
     if verb == "UPDATE":
+        # UPDATE CONTROL SET CONTROL_VALUE_NUM ... -> the DB2CTRL double.
+        if re.match(r"UPDATE\s+CONTROL\b", upper):
+            return _db2ctrl_call("UPDATE", period)
         return _db2_call("UPDATE", period)
 
     if verb == "DELETE":
@@ -410,6 +448,11 @@ def _translate_sql_block(text, period, ctx):
         # INSERT INTO PROCTRAN -> append an audit row to the DB2PROC double.
         if "PROCTRAN" in upper:
             return _db2proc_call("INSERT", period)
+        # INSERT INTO ACCOUNT -> append the new row to the DB2ACC double
+        # (the INSERT op honours a scripted SQLCODE so an insert-failure
+        # path can be driven).
+        if re.search(r"\bINTO\s+ACCOUNT\b", upper):
+            return _db2_call("INSERT", period)
         raise ValueError("Unsupported EXEC SQL INSERT target: {!r}".format(body))
 
     if verb == "OPEN":

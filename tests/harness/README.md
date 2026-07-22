@@ -89,15 +89,17 @@ test driver.
 | `CICSINIT` | (EIB init, injected)                | Sets `EIBRESP/EIBRESP2=0`, `EIBTRNID=spaces`, and `EIBTASKN` from `CBSA_TEST_TASKN` (default 1) — makes the RNG seed injectable. |
 | `CICSCONT` | `GET CONTAINER`, `PUT CONTAINER`    | Process-resident container store keyed by name; `resp=0` on hit, `resp=1` (CONTAINERERR) on a GET miss. |
 | `CICSDLAY` | `DELAY`                             | No-op by default (`resp=0`); set `CBSA_TEST_DELAY_MODE=real` to actually sleep. |
-| `CICSLINK` | `LINK PROGRAM(..) COMMAREA(..)`     | Records the LINK; for `PROGRAM('INQCUST ')` returns a **valid customer** (`INQCUST-INQ-SUCCESS='Y'`) so account programs that validate a customer can proceed. Force not-found with `CBSA_TEST_INQCUST_SUCCESS=N`. |
+| `CICSLINK` | `LINK PROGRAM(..) COMMAREA(..)`     | Records the LINK; for `PROGRAM('INQCUST ')` returns a **valid customer** (`INQCUST-INQ-SUCCESS='Y'`) — force not-found with `CBSA_TEST_INQCUST_SUCCESS=N`. For `PROGRAM('INQACCCU')` returns a customer **account count** (`NUMBER-OF-ACCOUNTS`) so programs that enforce the max-accounts-per-customer rule can proceed: `CBSA_TEST_INQACCCU_COUNT` (default 1) and `CBSA_TEST_INQACCCU_SUCCESS` (default Y). |
 | `CICSASGN` | `ASSIGN APPLID/PROGRAM/ABCODE(..)`  | Returns canned values (error-path only). |
 | `CICSABND` | `ABEND ABCODE(..)`                  | **Records the last abend code** in process-resident state so a driver can assert which failure path fired. The preprocessor emits `CALL 'CICSABND' … 'ABEND' abcode` **followed by `GOBACK`** so control cannot run past a translated ABEND. See "CICS abend capture" below. |
 | `CICSTIME` | `ASKTIME ABSTIME(..)`               | Returns a fixed ABSTIME (error-path only). |
 | `CICSFTIM` | `FORMATTIME`                        | Returns a fixed date/time (error-path only). |
+| `CICSENQ`  | `ENQ RESOURCE(..)`, `DEQ RESOURCE(..)` | No-op that always reports NORMAL. A unit test runs single-process, so the serialised resource (e.g. CREACC's account named-counter) is always uncontended. See "ENQ/DEQ" below. |
 | `CICSSYNC` | `SYNCPOINT [ROLLBACK]`              | No-op that always reports NORMAL. NOTE: it does **not** undo `DB2ACC`/`DB2PROC` row changes, so a rolled-back program leaves its in-memory writes in place — drive rollback/abort paths so the abort happens **before** any table write (see `xfrfunTest` TO-not-found case). |
 | `CICSVSAM` | file control: `READ`, `READ UPDATE`, `REWRITE`, `WRITE`, `STARTBR`, `READNEXT`, `READPREV`, `ENDBR` | Process-resident, keyed in-memory VSAM **KSDS** double serving **multiple named files** (e.g. `CUSTOMER` + `ABNDFILE`). See "VSAM (KSDS) data layer" below. |
 | `DB2ACC`   | `EXEC SQL` against `ACCOUNT`        | In-memory ACCOUNT table (see below): keyed SELECT, "last account" SELECT, cursor OPEN/FETCH/CLOSE, UPDATE, DELETE; driver seeds rows and scripts `SQLCODE`/`SQLERRD(3)`. |
 | `DB2PROC`  | `EXEC SQL INSERT INTO PROCTRAN`     | In-memory PROCTRAN audit table (see below): stores inserted rows; driver reads them back to assert the audit trail and scripts the INSERT `SQLCODE`. |
+| `DB2CTRL`  | `EXEC SQL` against `CONTROL`         | In-memory CONTROL named-counter table (see below): keyed SELECT + UPDATE of `CONTROL_VALUE_NUM`; driver seeds counter rows and reads them back. Used by CREACC to allocate the next account number. |
 | `CICSBMS`  | `SEND MAP`, `RECEIVE MAP`, `SEND TEXT`, `SEND CONTROL` | Process-resident 3270 screen buffer. `RECEIVE MAP` copies the driver-preloaded input image into the program; `SEND MAP`/`SEND TEXT` capture the output image for the driver to read back. See "BMS presentation layer" below. |
 | `CICSAID`  | (EIB AID/COMMAREA init, injected)   | Resident holder for the injectable `EIBAID` (which key was pressed) and `EIBCALEN`; the driver `SET`s them, `CICSINIT` reads them into the EIB at program entry. |
 | `CICSRETN` | `RETURN TRANSID(..) [COMMAREA(..)]` | Records the pseudo-conversational hand-off (next transid + saved COMMAREA) so a driver can assert which transaction the screen returned to. |
@@ -107,15 +109,16 @@ test driver.
 
 **CICS verbs stubbed so far:** `DELAY`, `GET CONTAINER`, `PUT CONTAINER`,
 `RETURN`, `LINK`, `ASSIGN` (APPLID/PROGRAM/ABCODE), `ABEND`, `ASKTIME`,
-`FORMATTIME`, `HANDLE ABEND` (disabled to a no-op), `SYNCPOINT`, and the VSAM
-file-control verbs `READ`, `READ UPDATE`, `REWRITE`, `WRITE`, `STARTBR`,
-`READNEXT`, `READPREV`, `ENDBR`. **`EXEC SQL`** against `ACCOUNT` (SELECT /
-UPDATE / DELETE / cursor) and `INSERT INTO PROCTRAN` are also supported (see the
-Db2 sections below). The **BMS / 3270 presentation** verbs `SEND MAP`,
-`RECEIVE MAP`, `SEND TEXT`, `SEND CONTROL`, `RETURN TRANSID(..) COMMAREA(..)`,
-`BIF DEEDIT`, and `INQUIRE ASSOCIATION` are supported too (see the BMS section
-below). Other verbs (`ADDRESS`, `GETMAIN`, `RETRIEVE`, `XCTL`, …) are **not**
-yet stubbed — add them as needed (below).
+`FORMATTIME`, `HANDLE ABEND` (disabled to a no-op), `SYNCPOINT`, `ENQ`, `DEQ`,
+and the VSAM file-control verbs `READ`, `READ UPDATE`, `REWRITE`, `WRITE`,
+`STARTBR`, `READNEXT`, `READPREV`, `ENDBR`. **`EXEC SQL`** against `ACCOUNT`
+(SELECT / UPDATE / DELETE / cursor / INSERT), `CONTROL` (keyed SELECT / UPDATE),
+and `INSERT INTO PROCTRAN` are also supported (see the Db2 sections below). The
+**BMS / 3270 presentation** verbs `SEND MAP`, `RECEIVE MAP`, `SEND TEXT`,
+`SEND CONTROL`, `RETURN TRANSID(..) COMMAREA(..)`, `BIF DEEDIT`, and
+`INQUIRE ASSOCIATION` are supported too (see the BMS section below). Other verbs
+(`ADDRESS`, `GETMAIN`, `RETRIEVE`, `XCTL`, …) are **not** yet stubbed — add them
+as needed (below).
 
 ### VSAM (KSDS) data layer — `CICSVSAM`
 
@@ -289,6 +292,51 @@ program, then `COUNT` + `GETLAST` on `DB2PROC` to check the audit row's `type`
 (`ODA` account-delete, `CRE`/`DEB` credit/debit, `TFR` transfer) and `amount`.
 See `tests/unit/delaccTest.cbl`, `dbcrfunTest.cbl`, `xfrfunTest.cbl`.
 
+### EXEC SQL / Db2 CONTROL named-counter double — `DB2CTRL`
+
+`DB2CTRL` is a sibling in-memory table for the **CONTROL** table, which holds
+CBSA's named-counter rows keyed on `CONTROL_NAME`. `CREACC` allocates the next
+account number from two rows — `<sortcode>-ACCOUNT-LAST` (the last account
+number issued) and `<sortcode>-ACCOUNT-COUNT` (how many accounts exist) — by
+`SELECT`ing a row, incrementing `CONTROL_VALUE_NUM`, and `UPDATE`ing it back
+(bracketed by `ENQ`/`DEQ`). The preprocessor maps those `CONTROL` statements to:
+
+```
+CALL 'DB2CTRL' USING BY CONTENT  <op>
+     BY REFERENCE HOST-CONTROL-ROW SQLCA
+```
+
+`HOST-CONTROL-ROW` is the program's three-field CONTROL host group
+(`CONTROL_NAME` X(32), `CONTROL_VALUE_NUM` S9(9) COMP, `CONTROL_VALUE_STR`
+X(40)). `copy/HOSTCTRL.cpy` is a byte-identical driver-side view for seeding
+and inspecting rows.
+
+| `op`     | Effect |
+|----------|--------|
+| `SELKEY` | `SELECT .. INTO row WHERE CONTROL_NAME` — `SQLCODE` 0 (found) / +100 (not found). |
+| `UPDATE` | `UPDATE CONTROL SET CONTROL_VALUE_NUM WHERE CONTROL_NAME` — 0 / +100. |
+| `SEED`   | Insert/replace a CONTROL row keyed on `CONTROL_NAME`, from `row` (driver). |
+| `GETVAL` | Copy the row matching `row`'s `CONTROL_NAME` back into `row` for read-back (driver). |
+| `CLEAR`  | Empty the table and clear scripted-error state (driver). |
+| `SETSQL` | Force `SQLCODE` on the next `SELKEY`/`UPDATE` (driver). |
+
+Typical pattern: `CLEAR`, then `SEED` the counter rows (e.g. `ACCOUNT-LAST`=10,
+`ACCOUNT-COUNT`=5), call the program, then `GETVAL` each row to assert the
+counters advanced. See `tests/unit/creaccTest.cbl`.
+
+### ENQ / DEQ serialisation — `CICSENQ`
+
+On the mainframe `CREACC` brackets its named-counter update with
+`EXEC CICS ENQ RESOURCE(..)` / `DEQ RESOURCE(..)` so concurrent tasks serialise.
+A unit test runs single-process, so the resource is always uncontended: the
+preprocessor routes both verbs to `CICSENQ`, a no-op that always reports NORMAL
+(`RESP`/`RESP2` = 0). The signature carries the verb name for diagnostics:
+
+```
+CALL 'CICSENQ' USING BY CONTENT  <'ENQ'|'DEQ'>
+     BY REFERENCE resp|OMITTED resp2|OMITTED
+```
+
 ### CICS abend capture — `CICSABND`
 
 Failure paths in these programs `EXEC CICS ABEND ABCODE(xxxx)` instead of
@@ -432,6 +480,8 @@ is also not yet stubbed (the CBSA menu uses `RETURN TRANSID`, not `XCTL`).
 | `CBSA_TEST_TASKN`       | `1`     | Value placed in `EIBTASKN`; seeds `FUNCTION RANDOM`. |
 | `CBSA_TEST_DELAY_MODE`  | `stub`  | `real` makes `CICSDLAY` actually sleep. |
 | `CBSA_TEST_INQCUST_SUCCESS` | `Y` | `N` makes the `CICSLINK` INQCUST stub return customer-not-found. |
+| `CBSA_TEST_INQACCCU_COUNT`  | `1` | Account count the `CICSLINK` INQACCCU stub returns (drive the max-accounts rule; set `10` for at-limit). |
+| `CBSA_TEST_INQACCCU_SUCCESS`| `Y` | `N` makes the `CICSLINK` INQACCCU stub report failure (`COMM-SUCCESS='N'`). |
 | `COBC`                  | `cobc`  | Override the compiler binary. |
 
 ## Adding a new program under test

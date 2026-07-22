@@ -37,7 +37,7 @@ preprocessor="${harnessDir}/cicsPreprocessor.py"
 # Programs under test (source base name = PROGRAM-ID = module file name).
 programsUnderTest=(CRDTAGY1 CRDTAGY2 CRDTAGY3 CRDTAGY4 CRDTAGY5 \
                    GETCOMPY GETSCODE UPDCUST INQCUST UPDACC INQACC INQACCCU \
-                   ABNDPROC DELACC DBCRFUN XFRFUN \
+                   ABNDPROC DELACC DBCRFUN XFRFUN CREACC \
                    BNKMENU BNK1CRA BNK1CAC BNK1TFN)
 
 # Deterministic seed for RANDOM (via EIBTASKN) and a no-op DELAY.

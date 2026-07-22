@@ -22,7 +22,11 @@
       *
       *   op (8 chars, space padded):
       *     CLEAR   - empty the table + reset cursor/error state (driver)
-      *     INSERT  - append 'row' as a fixture row               (driver)
+      *     INSERT  - append 'row' (fixture seed from a driver, or a
+      *               program INSERT INTO ACCOUNT); honours a scripted
+      *               SQLCODE from SETSQL so an insert-failure path can
+      *               be driven (a scripted failure leaves the table
+      *               unchanged, like a rejected INSERT).
       *     SETSQL  - force SQLCODE (and SQLERRD(3)) on the NEXT
       *               data op; read from the caller's SQLCA        (driver)
       *     SELKEY  - SELECT .. INTO row WHERE sortcode + accno
@@ -150,12 +154,20 @@
            MOVE 0   TO SQLCODE.
 
        DO-INSERT.
-           IF WS-ROW-COUNT >= 100
-              MOVE -901 TO SQLCODE
+      *    A scripted failure (SETSQL) leaves the table unchanged, just
+      *    like a real INSERT that the database rejected.
+           IF WS-FORCE-FLAG = 'Y'
+              MOVE WS-FORCE-SQLCODE  TO SQLCODE
+              MOVE WS-FORCE-SQLERRD3 TO SQLERRD(3)
+              MOVE 'N' TO WS-FORCE-FLAG
            ELSE
-              ADD 1 TO WS-ROW-COUNT
-              MOVE LK-ROW TO WS-ROW(WS-ROW-COUNT)
-              MOVE 0 TO SQLCODE
+              IF WS-ROW-COUNT >= 100
+                 MOVE -901 TO SQLCODE
+              ELSE
+                 ADD 1 TO WS-ROW-COUNT
+                 MOVE LK-ROW TO WS-ROW(WS-ROW-COUNT)
+                 MOVE 0 TO SQLCODE
+              END-IF
            END-IF.
 
        DO-SETSQL.
