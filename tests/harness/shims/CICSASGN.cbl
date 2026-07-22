@@ -2,8 +2,8 @@
       * CICSASGN - test double for EXEC CICS ASSIGN.
       *
       * Returns canned, inspectable values for the ASSIGN fields the
-      * Layer-0 programs request (APPLID, PROGRAM). Only reached on an
-      * error path in CRDTAGY1.
+      * programs request (APPLID, PROGRAM, ABCODE). Only reached on an
+      * error path. ABCODE writes 4 bytes so an X(4) receiver is safe.
       ******************************************************************
        IDENTIFICATION DIVISION.
        PROGRAM-ID. CICSASGN.
@@ -20,6 +20,8 @@
                  MOVE "CBSATEST" TO LK-RECEIVER
               WHEN "PROGRAM "
                  MOVE "TESTPGM " TO LK-RECEIVER
+              WHEN "ABCODE  "
+                 MOVE "ABND"     TO LK-RECEIVER(1:4)
               WHEN OTHER
                  MOVE SPACES     TO LK-RECEIVER
            END-EVALUATE

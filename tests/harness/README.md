@@ -30,9 +30,11 @@ tests/
   run.sh                     # build + run everything (CI entry point)
   Makefile                   # `make test` / `make clean` wrappers
   harness/
-    cicsPreprocessor.py      # EXEC CICS  ->  CALL translator
+    cicsPreprocessor.py      # EXEC CICS / EXEC SQL  ->  CALL translator
     copy/DFHEIBLK.cpy        # EIB shim copybook (injected into WORKING-STORAGE)
-    shims/                   # the CICS test doubles (one module per verb group)
+    copy/SQLCA.cpy           # SQL communications area (replaces EXEC SQL INCLUDE SQLCA)
+    copy/HOSTACCT.cpy        # driver-side view of a Db2 ACCOUNT row (fixtures)
+    shims/                   # the CICS/Db2 test doubles (one module per verb group)
     README.md                # this file
   unit/                      # one test driver per program under test
   build/                     # generated (git-ignored): gensrc, modules, bins
@@ -56,7 +58,12 @@ A fixed-format-aware preprocessor reads a `.cbl` and emits a translated copy
   top of the `PROCEDURE DIVISION` **only when the program references the EIB**,
   so the EIB fields resolve and are populated deterministically before use;
 * rewrites each `EXEC CICS <verb> … END-EXEC` block into a `CALL` to a stub
-  module, preserving the trailing period when present.
+  module, preserving the trailing period when present;
+* rewrites `EXEC SQL … END-EXEC` blocks against the Db2 ACCOUNT double
+  (`DB2ACC`) — see the *EXEC SQL / Db2* section below;
+* injects `USING DFHCOMMAREA` into a `PROCEDURE DIVISION` header that lacks a
+  `USING` clause but whose LINKAGE declares `01 DFHCOMMAREA` (CICS would pass
+  it implicitly; off-CICS the driver passes it on the `CALL`).
 
 `EXEC CICS RETURN` is translated to `GOBACK` (it ends the CICS task, so control
 must not fall through). Whole `EXEC` blocks are replaced with freshly generated
@@ -74,16 +81,62 @@ test driver.
 | `CICSINIT` | (EIB init, injected)                | Sets `EIBRESP/EIBRESP2=0`, `EIBTRNID=spaces`, and `EIBTASKN` from `CBSA_TEST_TASKN` (default 1) — makes the RNG seed injectable. |
 | `CICSCONT` | `GET CONTAINER`, `PUT CONTAINER`    | Process-resident container store keyed by name; `resp=0` on hit, `resp=1` (CONTAINERERR) on a GET miss. |
 | `CICSDLAY` | `DELAY`                             | No-op by default (`resp=0`); set `CBSA_TEST_DELAY_MODE=real` to actually sleep. |
-| `CICSLINK` | `LINK PROGRAM(..) COMMAREA(..)`     | Records the LINK (error-path only). |
-| `CICSASGN` | `ASSIGN APPLID(..)`, `ASSIGN PROGRAM(..)` | Returns canned values (error-path only). |
+| `CICSLINK` | `LINK PROGRAM(..) COMMAREA(..)`     | Records the LINK; for `PROGRAM('INQCUST ')` returns a **valid customer** (`INQCUST-INQ-SUCCESS='Y'`) so account programs that validate a customer can proceed. Force not-found with `CBSA_TEST_INQCUST_SUCCESS=N`. |
+| `CICSASGN` | `ASSIGN APPLID/PROGRAM/ABCODE(..)`  | Returns canned values (error-path only). |
 | `CICSABND` | `ABEND ABCODE(..)`                  | Records the abend code (error-path only). |
 | `CICSTIME` | `ASKTIME ABSTIME(..)`               | Returns a fixed ABSTIME (error-path only). |
 | `CICSFTIM` | `FORMATTIME`                        | Returns a fixed date/time (error-path only). |
+| `CICSSYNC` | `SYNCPOINT [ROLLBACK]`              | No-op; reports `RESP=NORMAL` (error-path only). |
+| `DB2ACC`   | `EXEC SQL` against `ACCOUNT`        | In-memory ACCOUNT table (see below): keyed SELECT, "last account" SELECT, cursor OPEN/FETCH/CLOSE, UPDATE; driver seeds rows and scripts `SQLCODE`. |
 
 **CICS verbs stubbed so far:** `DELAY`, `GET CONTAINER`, `PUT CONTAINER`,
-`RETURN`, `LINK`, `ASSIGN` (APPLID/PROGRAM), `ABEND`, `ASKTIME`, `FORMATTIME`.
-`EXEC SQL` and other verbs (`ADDRESS`, `GETMAIN`, `RETRIEVE`, …) are **not** yet
-stubbed — they are not used by the Layer-0 programs. Add them as needed (below).
+`RETURN`, `LINK`, `ASSIGN` (APPLID/PROGRAM/ABCODE), `ABEND`, `ASKTIME`,
+`FORMATTIME`, `HANDLE ABEND`, `SYNCPOINT`. Other verbs (`ADDRESS`, `GETMAIN`,
+`RETRIEVE`, …) are **not** yet stubbed. Add them as needed (below).
+
+### EXEC SQL / Db2 ACCOUNT double — `DB2ACC`
+
+`DB2ACC` is a process-resident in-memory `ACCOUNT` table (the same shared-state
+pattern as `CICSCONT`). The preprocessor rewrites the `EXEC SQL` statements the
+account programs use into `CALL 'DB2ACC'` with a fixed signature:
+
+```
+CALL 'DB2ACC' USING BY CONTENT  <op>
+     BY REFERENCE sortcode accno custno row sqlcode
+```
+
+`row` is the program's `HOST-ACCOUNT-ROW` group (12 ACCOUNT columns); `sqlcode`
+is the `SQLCODE` from the `SQLCA` copybook. `INCLUDE SQLCA` is rewritten to
+`COPY SQLCA.`; `INCLUDE <table>` (e.g. `ACCDB2`) is dropped (declarative only).
+
+**SQL subset covered** (exactly what UPDACC / INQACC / INQACCCU use):
+
+| Statement                                              | `op`     |
+|--------------------------------------------------------|----------|
+| `SELECT … INTO … WHERE sortcode AND accno`             | `SELKEY` |
+| `SELECT … ORDER BY ACCOUNT_NUMBER DESC FETCH FIRST 1`  | `SELMAX` |
+| `UPDATE ACCOUNT SET type/rate/overdraft WHERE key`     | `UPDATE` |
+| `DECLARE CURSOR` + `OPEN` (keyed by sortcode+accno)    | `OPENA`  |
+| `DECLARE CURSOR` + `OPEN` (keyed by custno+sortcode)   | `OPENC`  |
+| `FETCH FROM cursor INTO …` / `CLOSE cursor`            | `FETCH` / `CLOSE` |
+
+`SQLCODE` follows Db2 conventions: `0` found / `+100` not-found / `<0` error.
+Cursor `OPEN` mode is inferred from the `DECLARE CURSOR` WHERE columns.
+
+**Driver-facing operations** (seed/inspect the table from a test):
+
+| `op`     | Effect |
+|----------|--------|
+| `CLEAR`  | Empty the table, reset cursor + scripted-error state. |
+| `INSERT` | Append `row` as a fixture row. |
+| `SETSQL` | Force `sqlcode` on the **next** data op (drives error paths). |
+| `SELKEY` | Re-SELECT a row for assertions. |
+
+Include `copy/HOSTACCT.cpy` under an `01` in the driver to build/inspect rows;
+it is byte-identical to `HOST-ACCOUNT-ROW`. Account/date fixture conventions:
+keys are fixed-width numeric strings (sort code `"987654"`, account `"00000001"`,
+customer `"0000000001"`), dates are `"YYYY-MM-DD"`. See `tests/unit/updaccTest.cbl`,
+`inqaccTest.cbl`, `inqacccuTest.cbl`.
 
 ### Determinism knobs (environment variables)
 
@@ -91,6 +144,7 @@ stubbed — they are not used by the Layer-0 programs. Add them as needed (below
 |-------------------------|---------|--------|
 | `CBSA_TEST_TASKN`       | `1`     | Value placed in `EIBTASKN`; seeds `FUNCTION RANDOM`. |
 | `CBSA_TEST_DELAY_MODE`  | `stub`  | `real` makes `CICSDLAY` actually sleep. |
+| `CBSA_TEST_INQCUST_SUCCESS` | `Y` | `N` makes the `CICSLINK` INQCUST stub return customer-not-found. |
 | `COBC`                  | `cobc`  | Override the compiler binary. |
 
 ## Adding a new program under test
@@ -105,9 +159,9 @@ stubbed — they are not used by the Layer-0 programs. Add them as needed (below
 
 ## Adding a new CICS verb stub
 
-1. **Preprocessor:** add a branch in `_translate_block()` in
-   `cicsPreprocessor.py` that maps the verb's operands to a `CALL`. Pass data
-   items `BY REFERENCE` and literals `BY CONTENT`.
+1. **Preprocessor:** add a branch in `_translate_block()` (CICS) or
+   `_translate_sql_block()` (SQL) in `cicsPreprocessor.py` that maps the verb's
+   operands to a `CALL`. Pass data items `BY REFERENCE` and literals `BY CONTENT`.
 2. **Stub module:** add `harness/shims/<MODULE>.cbl` (a `PROGRAM-ID` whose name
    matches the module file). Keep behaviour deterministic and inspectable.
 3. For a new `DFHRESP(...)` condition, add it to `DFHRESP_MAP`.
