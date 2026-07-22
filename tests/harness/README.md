@@ -23,6 +23,13 @@ Requires `cobc` on the PATH (`sudo apt-get install -y gnucobol`). The script
 compiles the shims, preprocesses + compiles each program under test, then
 compiles and runs each unit test, exiting non-zero if any test fails.
 
+Everything is compiled with `-fperform-osvs` (`dialectOpts` in `run.sh`) so
+GnuCOBOL uses IBM OS/VS `PERFORM` semantics: a `GO TO` that branches back out
+of a still-active `PERFORM` — as `XFRFUN`'s `-911` deadlock-retry loop does
+(`GO TO UPDATE-ACCOUNT-DB2` from inside `PERFORM UPDATE-ACCOUNT-DB2-TO`) —
+unwinds cleanly when the perform's exit point is reached, instead of GnuCOBOL
+replaying the abandoned range.
+
 ## Layout
 
 ```
@@ -34,6 +41,7 @@ tests/
     copy/DFHEIBLK.cpy        # EIB shim copybook (injected into WORKING-STORAGE)
     copy/SQLCA.cpy           # SQL communications area (replaces EXEC SQL INCLUDE SQLCA)
     copy/HOSTACCT.cpy        # driver-side view of a Db2 ACCOUNT row (fixtures)
+    copy/HOSTPROC.cpy        # driver-side view of a Db2 PROCTRAN row (fixtures)
     shims/                   # the CICS/Db2 test doubles (one module per verb group)
     README.md                # this file
   unit/                      # one test driver per program under test
@@ -83,12 +91,13 @@ test driver.
 | `CICSDLAY` | `DELAY`                             | No-op by default (`resp=0`); set `CBSA_TEST_DELAY_MODE=real` to actually sleep. |
 | `CICSLINK` | `LINK PROGRAM(..) COMMAREA(..)`     | Records the LINK; for `PROGRAM('INQCUST ')` returns a **valid customer** (`INQCUST-INQ-SUCCESS='Y'`) so account programs that validate a customer can proceed. Force not-found with `CBSA_TEST_INQCUST_SUCCESS=N`. |
 | `CICSASGN` | `ASSIGN APPLID/PROGRAM/ABCODE(..)`  | Returns canned values (error-path only). |
-| `CICSABND` | `ABEND ABCODE(..)`                  | Records the abend code (error-path only). |
+| `CICSABND` | `ABEND ABCODE(..)`                  | **Records the last abend code** in process-resident state so a driver can assert which failure path fired. The preprocessor emits `CALL 'CICSABND' … 'ABEND' abcode` **followed by `GOBACK`** so control cannot run past a translated ABEND. See "CICS abend capture" below. |
 | `CICSTIME` | `ASKTIME ABSTIME(..)`               | Returns a fixed ABSTIME (error-path only). |
 | `CICSFTIM` | `FORMATTIME`                        | Returns a fixed date/time (error-path only). |
-| `CICSSYNC` | `SYNCPOINT [ROLLBACK]`              | No-op that always reports NORMAL (error-path only). |
-| `CICSVSAM` | file control: `READ`, `READ UPDATE`, `REWRITE`, `WRITE`, `STARTBR`, `READNEXT`, `READPREV`, `ENDBR` | Process-resident, keyed in-memory VSAM **KSDS** double. See "VSAM (KSDS) data layer" below. |
-| `DB2ACC`   | `EXEC SQL` against `ACCOUNT`        | In-memory ACCOUNT table (see below): keyed SELECT, "last account" SELECT, cursor OPEN/FETCH/CLOSE, UPDATE; driver seeds rows and scripts `SQLCODE`. |
+| `CICSSYNC` | `SYNCPOINT [ROLLBACK]`              | No-op that always reports NORMAL. NOTE: it does **not** undo `DB2ACC`/`DB2PROC` row changes, so a rolled-back program leaves its in-memory writes in place — drive rollback/abort paths so the abort happens **before** any table write (see `xfrfunTest` TO-not-found case). |
+| `CICSVSAM` | file control: `READ`, `READ UPDATE`, `REWRITE`, `WRITE`, `STARTBR`, `READNEXT`, `READPREV`, `ENDBR` | Process-resident, keyed in-memory VSAM **KSDS** double serving **multiple named files** (e.g. `CUSTOMER` + `ABNDFILE`). See "VSAM (KSDS) data layer" below. |
+| `DB2ACC`   | `EXEC SQL` against `ACCOUNT`        | In-memory ACCOUNT table (see below): keyed SELECT, "last account" SELECT, cursor OPEN/FETCH/CLOSE, UPDATE, DELETE; driver seeds rows and scripts `SQLCODE`/`SQLERRD(3)`. |
+| `DB2PROC`  | `EXEC SQL INSERT INTO PROCTRAN`     | In-memory PROCTRAN audit table (see below): stores inserted rows; driver reads them back to assert the audit trail and scripts the INSERT `SQLCODE`. |
 | `CICSBMS`  | `SEND MAP`, `RECEIVE MAP`, `SEND TEXT`, `SEND CONTROL` | Process-resident 3270 screen buffer. `RECEIVE MAP` copies the driver-preloaded input image into the program; `SEND MAP`/`SEND TEXT` capture the output image for the driver to read back. See "BMS presentation layer" below. |
 | `CICSAID`  | (EIB AID/COMMAREA init, injected)   | Resident holder for the injectable `EIBAID` (which key was pressed) and `EIBCALEN`; the driver `SET`s them, `CICSINIT` reads them into the EIB at program entry. |
 | `CICSRETN` | `RETURN TRANSID(..) [COMMAREA(..)]` | Records the pseudo-conversational hand-off (next transid + saved COMMAREA) so a driver can assert which transaction the screen returned to. |
@@ -100,12 +109,13 @@ test driver.
 `RETURN`, `LINK`, `ASSIGN` (APPLID/PROGRAM/ABCODE), `ABEND`, `ASKTIME`,
 `FORMATTIME`, `HANDLE ABEND` (disabled to a no-op), `SYNCPOINT`, and the VSAM
 file-control verbs `READ`, `READ UPDATE`, `REWRITE`, `WRITE`, `STARTBR`,
-`READNEXT`, `READPREV`, `ENDBR`. **`EXEC SQL`** against `ACCOUNT` is also
-supported (see the Db2 section below). The **BMS / 3270 presentation** verbs
-`SEND MAP`, `RECEIVE MAP`, `SEND TEXT`, `SEND CONTROL`, `RETURN TRANSID(..)
-COMMAREA(..)`, `BIF DEEDIT`, and `INQUIRE ASSOCIATION` are supported too (see
-the BMS section below). Other verbs (`ADDRESS`, `GETMAIN`, `RETRIEVE`, `XCTL`,
-…) are **not** yet stubbed — add them as needed (below).
+`READNEXT`, `READPREV`, `ENDBR`. **`EXEC SQL`** against `ACCOUNT` (SELECT /
+UPDATE / DELETE / cursor) and `INSERT INTO PROCTRAN` are also supported (see the
+Db2 sections below). The **BMS / 3270 presentation** verbs `SEND MAP`,
+`RECEIVE MAP`, `SEND TEXT`, `SEND CONTROL`, `RETURN TRANSID(..) COMMAREA(..)`,
+`BIF DEEDIT`, and `INQUIRE ASSOCIATION` are supported too (see the BMS section
+below). Other verbs (`ADDRESS`, `GETMAIN`, `RETRIEVE`, `XCTL`, …) are **not**
+yet stubbed — add them as needed (below).
 
 ### VSAM (KSDS) data layer — `CICSVSAM`
 
@@ -114,6 +124,17 @@ module = shared state" trick as `CICSCONT`). A test driver seeds fixture
 records into it, then calls the program under test, which reads / updates /
 browses the very same store. The preprocessor rewrites every file-control verb
 into one uniform call:
+
+**Multiple files by name.** The double serves any number of KSDS files side by
+side (e.g. `CUSTOMER` and `ABNDFILE`). Every slot is tagged with the file it
+belongs to, and each file carries its own *geometry* — the key offset + key
+length within the record image, and the record length. The geometry drives key
+extraction (`SEED`), key comparison (all ops, only the file's key length is
+compared), and how many bytes are copied to/from the caller's buffer, so files
+with different record layouts coexist without interfering. `CUSTOMER` geometry
+is **built in** as the default (key at cols 5-20, 16-byte key, 259-byte record)
+so the existing customer tests need no changes; any other file is registered
+once via the `DEFFILE` control op (below) before use.
 
 ```
 CALL 'CICSVSAM' USING BY CONTENT  op(8) file(8)
@@ -136,14 +157,44 @@ emitted by the preprocessor):
 
 | op         | Effect |
 |------------|--------|
-| `RESET   ` | Empty the store and clear all cursor/update state. |
-| `SEED    ` | Insert/replace a fixture record; the key is read from the record image (cols 5-20 = `CUSTOMER-KEY`). Pass the 259-byte record via the `record` operand and `OMITTED` for `ridfld`. |
+| `RESET   ` | Empty the data store and clear all cursor/update/forced-RESP state. The **file registry is preserved** (issue `DEFFILE` once, then `RESET` freely between sub-tests). |
+| `DEFFILE ` | Register/override a file's geometry. The 12-char `ridfld` operand carries three zoned numbers concatenated — key offset (4) + key length (4) + record length (4), all 1-based. e.g. `"000100120681"` = key at col 1, 12 bytes, 681-byte record (`ABNDFILE`). `CUSTOMER` is pre-registered, so only non-customer files need this. |
+| `SEED    ` | Insert/replace a fixture record; the key is read from the record image at the file's key offset/length (cols 5-20 for `CUSTOMER`). Pass the record via the `record` operand and `OMITTED` for `ridfld`. |
 | `FORCERSP` | Script the RESP the **next** file verb returns (value passed via the `resp` operand), to drive an arbitrary error path. |
 
 The record image the driver seeds is the `CUSTOMER` copybook layout (259
 bytes). See `tests/unit/updcustTest.cbl` and `tests/unit/inqcustTest.cbl` for
 the seed / call / assert pattern, including deterministic exercise of the
 `INQCUST` random-customer and last-customer browse paths via `CBSA_TEST_TASKN`.
+
+**A second file — `ABNDFILE` (`ABNDPROC`).** `ABNDPROC` `EXEC CICS WRITE`s an
+`ABNDINFO` record to the `ABNDFILE` KSDS (12-byte key = `ABND-VSAM-KEY`,
+681-byte record). `tests/unit/abndprocTest.cbl` shows how to reuse the same
+double for a non-customer file:
+
+```
+* register ABNDFILE geometry once: key col 1, len 12, record 681
+CALL 'CICSVSAM' USING BY CONTENT 'DEFFILE ' 'ABNDFILE'
+     BY REFERENCE ws-geom("000100120681") OMITTED resp resp2
+CALL 'CICSVSAM' USING BY CONTENT 'RESET   ' 'ABNDFILE' ...   *> data only
+CALL 'ABNDPROC' USING ws-commarea                            *> program WRITEs
+* read the written record back for assertions (READ is driver-callable):
+CALL 'CICSVSAM' USING BY CONTENT 'READ    ' 'ABNDFILE'
+     BY REFERENCE abnd-vsam-key ws-readback resp resp2
+```
+
+The error path (`ABNDPROC`'s "unable to write" branch) is exercised by
+scripting a non-NORMAL RESP on the WRITE with `FORCERSP` and then asserting no
+record was persisted.
+
+**The `CRDTAGY` family (`CRDTAGY1`-`CRDTAGY5`).** The five credit agencies are
+near-identical; each reads/writes its own container on channel `CIPCREDCHANN`
+(`CIPA`=CRDTAGY1, `CIPB`=CRDTAGY2, `CIPC`=CRDTAGY3, `CIPD`=CRDTAGY4,
+`CIPE`=CRDTAGY5) and computes a random 1..999 credit score seeded from
+`EIBTASKN`. Beyond the container name the only differences are cosmetic
+(whitespace and the program name embedded in `DISPLAY` diagnostics). Each has a
+driver (`tests/unit/crdtagy{1..5}Test.cbl`) asserting the score stays in range
+and is deterministic under a fixed `CBSA_TEST_TASKN`; the `DELAY` is a no-op.
 
 **Binding `DFHCOMMAREA`:** on the mainframe the CICS translator addresses
 `DFHCOMMAREA` automatically, so some programs (e.g. `UPDCUST`) write
@@ -159,41 +210,137 @@ account programs use into `CALL 'DB2ACC'` with a fixed signature:
 
 ```
 CALL 'DB2ACC' USING BY CONTENT  <op>
-     BY REFERENCE sortcode accno custno row sqlcode
+     BY REFERENCE sortcode accno custno HOST-ACCOUNT-ROW SQLCA
 ```
 
-`row` is the program's `HOST-ACCOUNT-ROW` group (12 ACCOUNT columns); `sqlcode`
-is the `SQLCODE` from the `SQLCA` copybook. `INCLUDE SQLCA` is rewritten to
-`COPY SQLCA.`; `INCLUDE <table>` (e.g. `ACCDB2`) is dropped (declarative only).
+`HOST-ACCOUNT-ROW` is the program's row group (12 ACCOUNT columns); the whole
+`SQLCA` group is passed (not just `SQLCODE`) so the double can also report
+`SQLERRD(3)` — the reason token XFRFUN inspects for its deadlock retry.
+`INCLUDE SQLCA` is rewritten to `COPY SQLCA.`; `INCLUDE <table>` (e.g. `ACCDB2`)
+is dropped (declarative only).
 
-**SQL subset covered** (exactly what UPDACC / INQACC / INQACCCU use):
+**SQL subset covered** (what UPDACC / INQACC / INQACCCU / DELACC / DBCRFUN /
+XFRFUN use):
 
 | Statement                                              | `op`     |
 |--------------------------------------------------------|----------|
 | `SELECT … INTO … WHERE sortcode AND accno`             | `SELKEY` |
 | `SELECT … ORDER BY ACCOUNT_NUMBER DESC FETCH FIRST 1`  | `SELMAX` |
-| `UPDATE ACCOUNT SET type/rate/overdraft WHERE key`     | `UPDATE` |
+| `UPDATE ACCOUNT SET <all columns> WHERE key`           | `UPDATE` |
+| `DELETE FROM ACCOUNT WHERE sortcode AND accno`         | `DELKEY` |
 | `DECLARE CURSOR` + `OPEN` (keyed by sortcode+accno)    | `OPENA`  |
 | `DECLARE CURSOR` + `OPEN` (keyed by custno+sortcode)   | `OPENC`  |
 | `FETCH FROM cursor INTO …` / `CLOSE cursor`            | `FETCH` / `CLOSE` |
 
 `SQLCODE` follows Db2 conventions: `0` found / `+100` not-found / `<0` error.
-Cursor `OPEN` mode is inferred from the `DECLARE CURSOR` WHERE columns.
+`UPDATE` replaces the **whole** matched row from the host variables (real SQL
+UPDATE sets every listed column), so the money-movement programs' balance
+writes persist and can be re-`SELKEY`ed. `DELKEY` removes the matched row
+(`+100` if none). Cursor `OPEN` mode is inferred from the `DECLARE CURSOR`
+WHERE columns.
 
 **Driver-facing operations** (seed/inspect the table from a test):
 
 | `op`     | Effect |
 |----------|--------|
 | `CLEAR`  | Empty the table, reset cursor + scripted-error state. |
-| `INSERT` | Append `row` as a fixture row. |
-| `SETSQL` | Force `sqlcode` on the **next** data op (drives error paths). |
+| `INSERT` | Append `HOST-ACCOUNT-ROW` as a fixture row. |
+| `SETSQL` | Force the caller's `SQLCODE` **and** `SQLERRD(3)` on the **next** data op (drives error / deadlock paths). |
 | `SELKEY` | Re-SELECT a row for assertions. |
+
+To script a Db2 deadlock for XFRFUN's retry loop, move the reason values into
+the driver's SQLCA before `SETSQL` — `SQLCODE = -911` and
+`SQLERRD(3) = 13172872` — then call the program; the forced pair is applied to
+the next `SELKEY`/`UPDATE` only (one-shot). Normal data ops zero `SQLERRD(3)`.
 
 Include `copy/HOSTACCT.cpy` under an `01` in the driver to build/inspect rows;
 it is byte-identical to `HOST-ACCOUNT-ROW`. Account/date fixture conventions:
 keys are fixed-width numeric strings (sort code `"987654"`, account `"00000001"`,
 customer `"0000000001"`), dates are `"YYYY-MM-DD"`. See `tests/unit/updaccTest.cbl`,
-`inqaccTest.cbl`, `inqacccuTest.cbl`.
+`inqaccTest.cbl`, `inqacccuTest.cbl`, `delaccTest.cbl`.
+
+### EXEC SQL / Db2 PROCTRAN audit double — `DB2PROC`
+
+`DB2PROC` is a sibling in-memory table for the **PROCTRAN** processed-transaction
+audit log. The account-mutating programs (`DELACC`, `DBCRFUN`, `XFRFUN`) write
+one audit row per business event; `DB2PROC` records those rows so a driver can
+assert the audit trail. The preprocessor maps `INSERT INTO PROCTRAN` to:
+
+```
+CALL 'DB2PROC' USING BY CONTENT  <op>
+     BY REFERENCE HOST-PROCTRAN-ROW SQLCA
+```
+
+`HOST-PROCTRAN-ROW` is the program's PROCTRAN host group (eyecatcher, sortcode,
+account, date, time, ref, type, description, amount). `copy/HOSTPROC.cpy` is a
+byte-identical driver-side view for building/inspecting rows.
+
+| `op`      | Effect |
+|-----------|--------|
+| `INSERT`  | Append `HOST-PROCTRAN-ROW` (unless a scripted error is pending). |
+| `CLEAR`   | Empty the table and clear scripted-error state (driver). |
+| `SETSQL`  | Force `SQLCODE` on the next `INSERT`; a failed insert leaves the table unchanged (driver). |
+| `COUNT`   | Return the current row count in `SQLERRD(1)` (driver). |
+| `GETLAST` | Copy the most-recently inserted row into `HOST-PROCTRAN-ROW` (driver). |
+| `GETFRST` | Copy the first inserted row into `HOST-PROCTRAN-ROW` (driver). |
+
+Typical assertion pattern: `CLEAR` both tables, seed ACCOUNT rows, call the
+program, then `COUNT` + `GETLAST` on `DB2PROC` to check the audit row's `type`
+(`ODA` account-delete, `CRE`/`DEB` credit/debit, `TFR` transfer) and `amount`.
+See `tests/unit/delaccTest.cbl`, `dbcrfunTest.cbl`, `xfrfunTest.cbl`.
+
+### CICS abend capture — `CICSABND`
+
+Failure paths in these programs `EXEC CICS ABEND ABCODE(xxxx)` instead of
+returning. The preprocessor translates that to a `CALL 'CICSABND'` that stores
+the code, immediately followed by `GOBACK` so nothing runs past the abend. The
+code is held in process-resident state, and the driver reads it with these
+control ops (signature `USING op abcode flag`):
+
+| `op`    | Effect |
+|---------|--------|
+| `READ`  | Return the last abend `abcode` (`X(4)`) and a `flag` (`Y` if an abend fired since the last reset). |
+| `RESET` | Clear the stored code and set `flag` to `N` (call before the program to isolate the assertion). |
+
+So a driver asserts a failure path by `RESET`-ing, calling the program, then
+`READ`-ing and comparing the code — e.g. `SAME` (transfer to same account),
+`FROM`/`TO  ` (account update failed), `HROL` (rollback failed), `WPCD`
+(PROCTRAN write failed), `HWPT` (DELACC PROCTRAN write failed). See
+`tests/unit/xfrfunTest.cbl` for the `SAME` capture.
+
+### Known gap — `BANKDATA` (not yet testable)
+
+`BANKDATA` (the batch seeder for CUSTOMER + ACCOUNT) was attempted for a scoped
+test but **could not be run** through this harness without building substantial
+new, non-trivial infrastructure. It is deliberately **not** in
+`programsUnderTest` — no fake pass. The concrete blockers:
+
+1. **CUSTOMER via native COBOL file I/O, not `EXEC CICS`.** `BANKDATA` uses
+   `SELECT ... ASSIGN TO VSAM ORGANIZATION INDEXED` with `OPEN OUTPUT` /
+   `WRITE` / `CLOSE` and a `FILE STATUS`. The preprocessor never sees these
+   (they aren't `EXEC CICS`), so the `CICSVSAM` double is bypassed entirely —
+   verifying CUSTOMER rows would mean reading a real GnuCOBOL ISAM file, not
+   the in-memory double the task asks us to reuse.
+2. **`EXEC SQL` verbs the harness doesn't translate.** `BANKDATA` uses
+   `INSERT INTO ACCOUNT`, `INSERT INTO CONTROL`, `DELETE FROM ACCOUNT`,
+   `DELETE FROM CONTROL` and `COMMIT WORK`. `cicsPreprocessor.py` currently
+   supports only SELECT/UPDATE/cursor ops and raises on the first `COMMIT WORK`.
+3. **`DB2ACC` has no INSERT/DELETE, and a different host-var convention.**
+   `BANKDATA`'s ACCOUNT host variables are `HV-ACCOUNT-SORT-CODE` /
+   `HV-ACCOUNT-NUMBER` (hyphenated), whereas `DB2ACC`'s calling convention
+   expects `HV-ACCOUNT-SORTCODE` / `HV-ACCOUNT-ACC-NO`. The `ACCOUNT` double
+   also has no row-insert or row-delete op.
+4. **No `CONTROL` table double exists.** `BANKDATA` writes two CONTROL rows
+   (`<sortcode>-ACCOUNT-LAST`, `<sortcode>-ACCOUNT-COUNT`); a new shim +
+   `HOST-CONTROL-ROW`/`CONTDB2` support would be required.
+5. **LE callable services.** `TIMESTAMP` calls `CEEGMT` / `CEEDATM`, which do
+   not exist off-z/OS and would need stub modules.
+
+The RNG *is* injectable (`RANDOM-SEED` comes from the PARM), so determinism is
+achievable; the blockers above are structural, not about non-determinism. A
+faithful `BANKDATA` test therefore needs a batch/native-file + `INSERT`/`DELETE`
+Db2 harness that is out of scope for this wave and would risk destabilising the
+shared harness the other waves depend on.
 
 ### BMS presentation layer — `CICSBMS` / `CICSAID` / `CICSRETN` / `LINKREC`
 

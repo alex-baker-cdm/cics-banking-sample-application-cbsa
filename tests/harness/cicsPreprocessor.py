@@ -93,7 +93,16 @@ ROW_GROUP = "HOST-ACCOUNT-ROW"
 KEY_SORTCODE = "HV-ACCOUNT-SORTCODE"
 KEY_ACCNO = "HV-ACCOUNT-ACC-NO"
 KEY_CUSTNO = "HV-ACCOUNT-CUST-NO"
-SQLCODE_FIELD = "SQLCODE"
+
+# The DB2ACC / DB2PROC calling convention passes the program's whole SQL
+# communications area (the SQLCA group) as the final BY REFERENCE operand,
+# so the double can set both SQLCODE and, for the XFRFUN -911 deadlock
+# path, SQLERRD(3). Every program that uses the SQL doubles INCLUDEs SQLCA.
+SQLCA_FIELD = "SQLCA"
+
+# PROCTRAN audit-table programs hold their nine Db2 PROCTRAN host variables
+# in a group with this name; the INSERT translation passes it to DB2PROC.
+PROC_ROW_GROUP = "HOST-PROCTRAN-ROW"
 
 
 def _operands(text):
@@ -179,11 +188,31 @@ def _vsam_call(verb, body, ops, period):
 
 
 def _db2_call(op, period):
-    """Build a CALL to the DB2ACC double with the fixed harness signature."""
+    """Build a CALL to the DB2ACC (ACCOUNT table) double.
+
+    Fixed positional signature:
+        CALL 'DB2ACC' USING BY CONTENT op(8)
+             BY REFERENCE sortcode accno custno HOST-ACCOUNT-ROW SQLCA
+    """
     return _call(
         "DB2ACC",
         contents=["'{}'".format(op.ljust(8))],
-        refs=[KEY_SORTCODE, KEY_ACCNO, KEY_CUSTNO, ROW_GROUP, SQLCODE_FIELD],
+        refs=[KEY_SORTCODE, KEY_ACCNO, KEY_CUSTNO, ROW_GROUP, SQLCA_FIELD],
+        period=period,
+    )
+
+
+def _db2proc_call(op, period):
+    """Build a CALL to the DB2PROC (PROCTRAN audit-table) double.
+
+    Fixed positional signature:
+        CALL 'DB2PROC' USING BY CONTENT op(8)
+             BY REFERENCE HOST-PROCTRAN-ROW SQLCA
+    """
+    return _call(
+        "DB2PROC",
+        contents=["'{}'".format(op.ljust(8))],
+        refs=[PROC_ROW_GROUP, SQLCA_FIELD],
         period=period,
     )
 
@@ -313,7 +342,15 @@ def _translate_block(text, period):
         raise ValueError("Unsupported EXEC CICS ASSIGN operands: {!r}".format(body))
 
     if verb == "ABEND":
-        return _call("CICSABND", contents=[ops["ABCODE"]], period=period)
+        # EXEC CICS ABEND terminates the task. Record the abend code in the
+        # resident CICSABND double (so a driver can read it back) and then
+        # GOBACK so control does not fall through into code the real abend
+        # would never reach.
+        lines = _call("CICSABND",
+                      contents=["'ABEND   '", ops["ABCODE"]],
+                      period=False)
+        lines.append("{}GOBACK{}".format(INDENT, "." if period else ""))
+        return lines
 
     if verb == "ASKTIME":
         return _call("CICSTIME", refs=[ops["ABSTIME"]], period=period)
@@ -364,6 +401,16 @@ def _translate_sql_block(text, period, ctx):
 
     if verb == "UPDATE":
         return _db2_call("UPDATE", period)
+
+    if verb == "DELETE":
+        # DELETE FROM ACCOUNT (keyed) -> remove the row from the DB2ACC double.
+        return _db2_call("DELKEY", period)
+
+    if verb == "INSERT":
+        # INSERT INTO PROCTRAN -> append an audit row to the DB2PROC double.
+        if "PROCTRAN" in upper:
+            return _db2proc_call("INSERT", period)
+        raise ValueError("Unsupported EXEC SQL INSERT target: {!r}".format(body))
 
     if verb == "OPEN":
         op = "OPENC" if ctx.get("cursor_mode") == "C" else "OPENA"

@@ -35,7 +35,10 @@ harnessCopy="${harnessDir}/copy"
 preprocessor="${harnessDir}/cicsPreprocessor.py"
 
 # Programs under test (source base name = PROGRAM-ID = module file name).
-programsUnderTest=(CRDTAGY1 GETCOMPY GETSCODE UPDCUST INQCUST UPDACC INQACC INQACCCU BNKMENU BNK1CRA BNK1CAC BNK1TFN)
+programsUnderTest=(CRDTAGY1 CRDTAGY2 CRDTAGY3 CRDTAGY4 CRDTAGY5 \
+                   GETCOMPY GETSCODE UPDCUST INQCUST UPDACC INQACC INQACCCU \
+                   ABNDPROC DELACC DBCRFUN XFRFUN \
+                   BNKMENU BNK1CRA BNK1CAC BNK1TFN)
 
 # Deterministic seed for RANDOM (via EIBTASKN) and a no-op DELAY.
 export CBSA_TEST_TASKN="${CBSA_TEST_TASKN:-1}"
@@ -43,6 +46,11 @@ export CBSA_TEST_DELAY_MODE="${CBSA_TEST_DELAY_MODE:-stub}"
 
 cobc="${COBC:-cobc}"
 copyOpts=(-I "${harnessCopy}" -I "${cobolCopy}")
+
+# IBM OS/VS PERFORM semantics: a GO TO that jumps back out of a still-active
+# PERFORM (as XFRFUN's -911 deadlock-retry loop does) returns cleanly when the
+# perform's exit point is next reached, instead of GnuCOBOL replaying the range.
+dialectOpts=(-fperform-osvs)
 
 rm -rf "${buildDir}"
 mkdir -p "${moduleDir}" "${genSrcDir}" "${binDir}"
@@ -55,7 +63,8 @@ echo "== Building shim modules =="
 for shim in "${shimDir}"/*.cbl; do
     name="$(basename "${shim}" .cbl)"
     echo "   shim  ${name}"
-    "${cobc}" -m "${copyOpts[@]}" -o "${moduleDir}/${name}.so" "${shim}"
+    "${cobc}" -m "${dialectOpts[@]}" "${copyOpts[@]}" \
+        -o "${moduleDir}/${name}.so" "${shim}"
 done
 echo
 
@@ -63,8 +72,8 @@ echo "== Preprocessing + building programs under test =="
 for prog in "${programsUnderTest[@]}"; do
     echo "   prog  ${prog}"
     python3 "${preprocessor}" "${cobolSrc}/${prog}.cbl" > "${genSrcDir}/${prog}.cbl"
-    "${cobc}" -m "${copyOpts[@]}" -o "${moduleDir}/${prog}.so" \
-        "${genSrcDir}/${prog}.cbl"
+    "${cobc}" -m "${dialectOpts[@]}" "${copyOpts[@]}" \
+        -o "${moduleDir}/${prog}.so" "${genSrcDir}/${prog}.cbl"
 done
 echo
 
@@ -76,7 +85,8 @@ total=0
 for driver in "${unitDir}"/*.cbl; do
     name="$(basename "${driver}" .cbl)"
     total=$((total + 1))
-    "${cobc}" -x "${copyOpts[@]}" -o "${binDir}/${name}" "${driver}"
+    "${cobc}" -x "${dialectOpts[@]}" "${copyOpts[@]}" \
+        -o "${binDir}/${name}" "${driver}"
     echo "-----------------------------------------------------------"
     if "${binDir}/${name}"; then
         :
