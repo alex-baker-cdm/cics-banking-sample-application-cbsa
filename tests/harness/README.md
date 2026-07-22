@@ -87,7 +87,7 @@ test driver.
 | `CICSTIME` | `ASKTIME ABSTIME(..)`               | Returns a fixed ABSTIME (error-path only). |
 | `CICSFTIM` | `FORMATTIME`                        | Returns a fixed date/time (error-path only). |
 | `CICSSYNC` | `SYNCPOINT [ROLLBACK]`              | No-op that always reports NORMAL (error-path only). |
-| `CICSVSAM` | file control: `READ`, `READ UPDATE`, `REWRITE`, `WRITE`, `STARTBR`, `READNEXT`, `READPREV`, `ENDBR` | Process-resident, keyed in-memory VSAM **KSDS** double. See "VSAM (KSDS) data layer" below. |
+| `CICSVSAM` | file control: `READ`, `READ UPDATE`, `REWRITE`, `WRITE`, `STARTBR`, `READNEXT`, `READPREV`, `ENDBR` | Process-resident, keyed in-memory VSAM **KSDS** double serving **multiple named files** (e.g. `CUSTOMER` + `ABNDFILE`). See "VSAM (KSDS) data layer" below. |
 | `DB2ACC`   | `EXEC SQL` against `ACCOUNT`        | In-memory ACCOUNT table (see below): keyed SELECT, "last account" SELECT, cursor OPEN/FETCH/CLOSE, UPDATE; driver seeds rows and scripts `SQLCODE`. |
 
 **CICS verbs stubbed so far:** `DELAY`, `GET CONTAINER`, `PUT CONTAINER`,
@@ -105,6 +105,17 @@ module = shared state" trick as `CICSCONT`). A test driver seeds fixture
 records into it, then calls the program under test, which reads / updates /
 browses the very same store. The preprocessor rewrites every file-control verb
 into one uniform call:
+
+**Multiple files by name.** The double serves any number of KSDS files side by
+side (e.g. `CUSTOMER` and `ABNDFILE`). Every slot is tagged with the file it
+belongs to, and each file carries its own *geometry* — the key offset + key
+length within the record image, and the record length. The geometry drives key
+extraction (`SEED`), key comparison (all ops, only the file's key length is
+compared), and how many bytes are copied to/from the caller's buffer, so files
+with different record layouts coexist without interfering. `CUSTOMER` geometry
+is **built in** as the default (key at cols 5-20, 16-byte key, 259-byte record)
+so the existing customer tests need no changes; any other file is registered
+once via the `DEFFILE` control op (below) before use.
 
 ```
 CALL 'CICSVSAM' USING BY CONTENT  op(8) file(8)
@@ -127,14 +138,44 @@ emitted by the preprocessor):
 
 | op         | Effect |
 |------------|--------|
-| `RESET   ` | Empty the store and clear all cursor/update state. |
-| `SEED    ` | Insert/replace a fixture record; the key is read from the record image (cols 5-20 = `CUSTOMER-KEY`). Pass the 259-byte record via the `record` operand and `OMITTED` for `ridfld`. |
+| `RESET   ` | Empty the data store and clear all cursor/update/forced-RESP state. The **file registry is preserved** (issue `DEFFILE` once, then `RESET` freely between sub-tests). |
+| `DEFFILE ` | Register/override a file's geometry. The 12-char `ridfld` operand carries three zoned numbers concatenated — key offset (4) + key length (4) + record length (4), all 1-based. e.g. `"000100120681"` = key at col 1, 12 bytes, 681-byte record (`ABNDFILE`). `CUSTOMER` is pre-registered, so only non-customer files need this. |
+| `SEED    ` | Insert/replace a fixture record; the key is read from the record image at the file's key offset/length (cols 5-20 for `CUSTOMER`). Pass the record via the `record` operand and `OMITTED` for `ridfld`. |
 | `FORCERSP` | Script the RESP the **next** file verb returns (value passed via the `resp` operand), to drive an arbitrary error path. |
 
 The record image the driver seeds is the `CUSTOMER` copybook layout (259
 bytes). See `tests/unit/updcustTest.cbl` and `tests/unit/inqcustTest.cbl` for
 the seed / call / assert pattern, including deterministic exercise of the
 `INQCUST` random-customer and last-customer browse paths via `CBSA_TEST_TASKN`.
+
+**A second file — `ABNDFILE` (`ABNDPROC`).** `ABNDPROC` `EXEC CICS WRITE`s an
+`ABNDINFO` record to the `ABNDFILE` KSDS (12-byte key = `ABND-VSAM-KEY`,
+681-byte record). `tests/unit/abndprocTest.cbl` shows how to reuse the same
+double for a non-customer file:
+
+```
+* register ABNDFILE geometry once: key col 1, len 12, record 681
+CALL 'CICSVSAM' USING BY CONTENT 'DEFFILE ' 'ABNDFILE'
+     BY REFERENCE ws-geom("000100120681") OMITTED resp resp2
+CALL 'CICSVSAM' USING BY CONTENT 'RESET   ' 'ABNDFILE' ...   *> data only
+CALL 'ABNDPROC' USING ws-commarea                            *> program WRITEs
+* read the written record back for assertions (READ is driver-callable):
+CALL 'CICSVSAM' USING BY CONTENT 'READ    ' 'ABNDFILE'
+     BY REFERENCE abnd-vsam-key ws-readback resp resp2
+```
+
+The error path (`ABNDPROC`'s "unable to write" branch) is exercised by
+scripting a non-NORMAL RESP on the WRITE with `FORCERSP` and then asserting no
+record was persisted.
+
+**The `CRDTAGY` family (`CRDTAGY1`-`CRDTAGY5`).** The five credit agencies are
+near-identical; each reads/writes its own container on channel `CIPCREDCHANN`
+(`CIPA`=CRDTAGY1, `CIPB`=CRDTAGY2, `CIPC`=CRDTAGY3, `CIPD`=CRDTAGY4,
+`CIPE`=CRDTAGY5) and computes a random 1..999 credit score seeded from
+`EIBTASKN`. Beyond the container name the only differences are cosmetic
+(whitespace and the program name embedded in `DISPLAY` diagnostics). Each has a
+driver (`tests/unit/crdtagy{1..5}Test.cbl`) asserting the score stays in range
+and is deterministic under a fixed `CBSA_TEST_TASKN`; the `DELAY` is a no-op.
 
 **Binding `DFHCOMMAREA`:** on the mainframe the CICS translator addresses
 `DFHCOMMAREA` automatically, so some programs (e.g. `UPDCUST`) write
@@ -185,6 +226,40 @@ it is byte-identical to `HOST-ACCOUNT-ROW`. Account/date fixture conventions:
 keys are fixed-width numeric strings (sort code `"987654"`, account `"00000001"`,
 customer `"0000000001"`), dates are `"YYYY-MM-DD"`. See `tests/unit/updaccTest.cbl`,
 `inqaccTest.cbl`, `inqacccuTest.cbl`.
+
+### Known gap — `BANKDATA` (not yet testable)
+
+`BANKDATA` (the batch seeder for CUSTOMER + ACCOUNT) was attempted for a scoped
+test but **could not be run** through this harness without building substantial
+new, non-trivial infrastructure. It is deliberately **not** in
+`programsUnderTest` — no fake pass. The concrete blockers:
+
+1. **CUSTOMER via native COBOL file I/O, not `EXEC CICS`.** `BANKDATA` uses
+   `SELECT ... ASSIGN TO VSAM ORGANIZATION INDEXED` with `OPEN OUTPUT` /
+   `WRITE` / `CLOSE` and a `FILE STATUS`. The preprocessor never sees these
+   (they aren't `EXEC CICS`), so the `CICSVSAM` double is bypassed entirely —
+   verifying CUSTOMER rows would mean reading a real GnuCOBOL ISAM file, not
+   the in-memory double the task asks us to reuse.
+2. **`EXEC SQL` verbs the harness doesn't translate.** `BANKDATA` uses
+   `INSERT INTO ACCOUNT`, `INSERT INTO CONTROL`, `DELETE FROM ACCOUNT`,
+   `DELETE FROM CONTROL` and `COMMIT WORK`. `cicsPreprocessor.py` currently
+   supports only SELECT/UPDATE/cursor ops and raises on the first `COMMIT WORK`.
+3. **`DB2ACC` has no INSERT/DELETE, and a different host-var convention.**
+   `BANKDATA`'s ACCOUNT host variables are `HV-ACCOUNT-SORT-CODE` /
+   `HV-ACCOUNT-NUMBER` (hyphenated), whereas `DB2ACC`'s calling convention
+   expects `HV-ACCOUNT-SORTCODE` / `HV-ACCOUNT-ACC-NO`. The `ACCOUNT` double
+   also has no row-insert or row-delete op.
+4. **No `CONTROL` table double exists.** `BANKDATA` writes two CONTROL rows
+   (`<sortcode>-ACCOUNT-LAST`, `<sortcode>-ACCOUNT-COUNT`); a new shim +
+   `HOST-CONTROL-ROW`/`CONTDB2` support would be required.
+5. **LE callable services.** `TIMESTAMP` calls `CEEGMT` / `CEEDATM`, which do
+   not exist off-z/OS and would need stub modules.
+
+The RNG *is* injectable (`RANDOM-SEED` comes from the PARM), so determinism is
+achievable; the blockers above are structural, not about non-determinism. A
+faithful `BANKDATA` test therefore needs a batch/native-file + `INSERT`/`DELETE`
+Db2 harness that is out of scope for this wave and would risk destabilising the
+shared harness the other waves depend on.
 
 ### Determinism knobs (environment variables)
 
