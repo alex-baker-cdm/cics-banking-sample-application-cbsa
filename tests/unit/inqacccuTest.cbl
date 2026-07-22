@@ -32,7 +32,7 @@
        01 WS-SC                           PIC X(6)  VALUE SPACES.
        01 WS-AN                           PIC X(8)  VALUE SPACES.
        01 WS-CN                           PIC X(10) VALUE SPACES.
-       01 WS-SQL                          PIC S9(9) COMP-5 VALUE 0.
+       COPY SQLCA.
 
        01 OP-CLEAR                        PIC X(8) VALUE "CLEAR".
        01 OP-INSERT                       PIC X(8) VALUE "INSERT".
@@ -119,7 +119,7 @@
       *    by customer WS-SEED-CUST, with account numbers 1..count.
        SEED-CUSTOMER-ACCOUNTS.
            CALL 'DB2ACC' USING OP-CLEAR WS-SC WS-AN WS-CN
-                               FIX-ROW WS-SQL
+                               FIX-ROW SQLCA
            MOVE "ACCT"       TO FIX-EYE
            MOVE WS-SEED-CUST TO FIX-CUSTNO
            MOVE "987654"     TO FIX-SORTCODE
@@ -135,5 +135,5 @@
               UNTIL WS-IDX > WS-SEED-COUNT
               MOVE WS-IDX TO FIX-ACCNO
               CALL 'DB2ACC' USING OP-INSERT WS-SC WS-AN WS-CN
-                                  FIX-ROW WS-SQL
+                                  FIX-ROW SQLCA
            END-PERFORM.

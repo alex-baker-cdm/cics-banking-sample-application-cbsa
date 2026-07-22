@@ -23,6 +23,13 @@ Requires `cobc` on the PATH (`sudo apt-get install -y gnucobol`). The script
 compiles the shims, preprocesses + compiles each program under test, then
 compiles and runs each unit test, exiting non-zero if any test fails.
 
+Everything is compiled with `-fperform-osvs` (`dialectOpts` in `run.sh`) so
+GnuCOBOL uses IBM OS/VS `PERFORM` semantics: a `GO TO` that branches back out
+of a still-active `PERFORM` — as `XFRFUN`'s `-911` deadlock-retry loop does
+(`GO TO UPDATE-ACCOUNT-DB2` from inside `PERFORM UPDATE-ACCOUNT-DB2-TO`) —
+unwinds cleanly when the perform's exit point is reached, instead of GnuCOBOL
+replaying the abandoned range.
+
 ## Layout
 
 ```
@@ -34,6 +41,7 @@ tests/
     copy/DFHEIBLK.cpy        # EIB shim copybook (injected into WORKING-STORAGE)
     copy/SQLCA.cpy           # SQL communications area (replaces EXEC SQL INCLUDE SQLCA)
     copy/HOSTACCT.cpy        # driver-side view of a Db2 ACCOUNT row (fixtures)
+    copy/HOSTPROC.cpy        # driver-side view of a Db2 PROCTRAN row (fixtures)
     shims/                   # the CICS/Db2 test doubles (one module per verb group)
     README.md                # this file
   unit/                      # one test driver per program under test
@@ -83,20 +91,22 @@ test driver.
 | `CICSDLAY` | `DELAY`                             | No-op by default (`resp=0`); set `CBSA_TEST_DELAY_MODE=real` to actually sleep. |
 | `CICSLINK` | `LINK PROGRAM(..) COMMAREA(..)`     | Records the LINK; for `PROGRAM('INQCUST ')` returns a **valid customer** (`INQCUST-INQ-SUCCESS='Y'`) so account programs that validate a customer can proceed. Force not-found with `CBSA_TEST_INQCUST_SUCCESS=N`. |
 | `CICSASGN` | `ASSIGN APPLID/PROGRAM/ABCODE(..)`  | Returns canned values (error-path only). |
-| `CICSABND` | `ABEND ABCODE(..)`                  | Records the abend code (error-path only). |
+| `CICSABND` | `ABEND ABCODE(..)`                  | **Records the last abend code** in process-resident state so a driver can assert which failure path fired. The preprocessor emits `CALL 'CICSABND' … 'ABEND' abcode` **followed by `GOBACK`** so control cannot run past a translated ABEND. See "CICS abend capture" below. |
 | `CICSTIME` | `ASKTIME ABSTIME(..)`               | Returns a fixed ABSTIME (error-path only). |
 | `CICSFTIM` | `FORMATTIME`                        | Returns a fixed date/time (error-path only). |
-| `CICSSYNC` | `SYNCPOINT [ROLLBACK]`              | No-op that always reports NORMAL (error-path only). |
+| `CICSSYNC` | `SYNCPOINT [ROLLBACK]`              | No-op that always reports NORMAL. NOTE: it does **not** undo `DB2ACC`/`DB2PROC` row changes, so a rolled-back program leaves its in-memory writes in place — drive rollback/abort paths so the abort happens **before** any table write (see `xfrfunTest` TO-not-found case). |
 | `CICSVSAM` | file control: `READ`, `READ UPDATE`, `REWRITE`, `WRITE`, `STARTBR`, `READNEXT`, `READPREV`, `ENDBR` | Process-resident, keyed in-memory VSAM **KSDS** double serving **multiple named files** (e.g. `CUSTOMER` + `ABNDFILE`). See "VSAM (KSDS) data layer" below. |
-| `DB2ACC`   | `EXEC SQL` against `ACCOUNT`        | In-memory ACCOUNT table (see below): keyed SELECT, "last account" SELECT, cursor OPEN/FETCH/CLOSE, UPDATE; driver seeds rows and scripts `SQLCODE`. |
+| `DB2ACC`   | `EXEC SQL` against `ACCOUNT`        | In-memory ACCOUNT table (see below): keyed SELECT, "last account" SELECT, cursor OPEN/FETCH/CLOSE, UPDATE, DELETE; driver seeds rows and scripts `SQLCODE`/`SQLERRD(3)`. |
+| `DB2PROC`  | `EXEC SQL INSERT INTO PROCTRAN`     | In-memory PROCTRAN audit table (see below): stores inserted rows; driver reads them back to assert the audit trail and scripts the INSERT `SQLCODE`. |
 
 **CICS verbs stubbed so far:** `DELAY`, `GET CONTAINER`, `PUT CONTAINER`,
 `RETURN`, `LINK`, `ASSIGN` (APPLID/PROGRAM/ABCODE), `ABEND`, `ASKTIME`,
 `FORMATTIME`, `HANDLE ABEND` (disabled to a no-op), `SYNCPOINT`, and the VSAM
 file-control verbs `READ`, `READ UPDATE`, `REWRITE`, `WRITE`, `STARTBR`,
-`READNEXT`, `READPREV`, `ENDBR`. **`EXEC SQL`** against `ACCOUNT` is also
-supported (see the Db2 section below). Other verbs (`ADDRESS`, `GETMAIN`,
-`RETRIEVE`, …) are **not** yet stubbed — add them as needed (below).
+`READNEXT`, `READPREV`, `ENDBR`. **`EXEC SQL`** against `ACCOUNT` (SELECT /
+UPDATE / DELETE / cursor) and `INSERT INTO PROCTRAN` are also supported (see the
+Db2 sections below). Other verbs (`ADDRESS`, `GETMAIN`, `RETRIEVE`, …) are
+**not** yet stubbed — add them as needed (below).
 
 ### VSAM (KSDS) data layer — `CICSVSAM`
 
@@ -191,41 +201,103 @@ account programs use into `CALL 'DB2ACC'` with a fixed signature:
 
 ```
 CALL 'DB2ACC' USING BY CONTENT  <op>
-     BY REFERENCE sortcode accno custno row sqlcode
+     BY REFERENCE sortcode accno custno HOST-ACCOUNT-ROW SQLCA
 ```
 
-`row` is the program's `HOST-ACCOUNT-ROW` group (12 ACCOUNT columns); `sqlcode`
-is the `SQLCODE` from the `SQLCA` copybook. `INCLUDE SQLCA` is rewritten to
-`COPY SQLCA.`; `INCLUDE <table>` (e.g. `ACCDB2`) is dropped (declarative only).
+`HOST-ACCOUNT-ROW` is the program's row group (12 ACCOUNT columns); the whole
+`SQLCA` group is passed (not just `SQLCODE`) so the double can also report
+`SQLERRD(3)` — the reason token XFRFUN inspects for its deadlock retry.
+`INCLUDE SQLCA` is rewritten to `COPY SQLCA.`; `INCLUDE <table>` (e.g. `ACCDB2`)
+is dropped (declarative only).
 
-**SQL subset covered** (exactly what UPDACC / INQACC / INQACCCU use):
+**SQL subset covered** (what UPDACC / INQACC / INQACCCU / DELACC / DBCRFUN /
+XFRFUN use):
 
 | Statement                                              | `op`     |
 |--------------------------------------------------------|----------|
 | `SELECT … INTO … WHERE sortcode AND accno`             | `SELKEY` |
 | `SELECT … ORDER BY ACCOUNT_NUMBER DESC FETCH FIRST 1`  | `SELMAX` |
-| `UPDATE ACCOUNT SET type/rate/overdraft WHERE key`     | `UPDATE` |
+| `UPDATE ACCOUNT SET <all columns> WHERE key`           | `UPDATE` |
+| `DELETE FROM ACCOUNT WHERE sortcode AND accno`         | `DELKEY` |
 | `DECLARE CURSOR` + `OPEN` (keyed by sortcode+accno)    | `OPENA`  |
 | `DECLARE CURSOR` + `OPEN` (keyed by custno+sortcode)   | `OPENC`  |
 | `FETCH FROM cursor INTO …` / `CLOSE cursor`            | `FETCH` / `CLOSE` |
 
 `SQLCODE` follows Db2 conventions: `0` found / `+100` not-found / `<0` error.
-Cursor `OPEN` mode is inferred from the `DECLARE CURSOR` WHERE columns.
+`UPDATE` replaces the **whole** matched row from the host variables (real SQL
+UPDATE sets every listed column), so the money-movement programs' balance
+writes persist and can be re-`SELKEY`ed. `DELKEY` removes the matched row
+(`+100` if none). Cursor `OPEN` mode is inferred from the `DECLARE CURSOR`
+WHERE columns.
 
 **Driver-facing operations** (seed/inspect the table from a test):
 
 | `op`     | Effect |
 |----------|--------|
 | `CLEAR`  | Empty the table, reset cursor + scripted-error state. |
-| `INSERT` | Append `row` as a fixture row. |
-| `SETSQL` | Force `sqlcode` on the **next** data op (drives error paths). |
+| `INSERT` | Append `HOST-ACCOUNT-ROW` as a fixture row. |
+| `SETSQL` | Force the caller's `SQLCODE` **and** `SQLERRD(3)` on the **next** data op (drives error / deadlock paths). |
 | `SELKEY` | Re-SELECT a row for assertions. |
+
+To script a Db2 deadlock for XFRFUN's retry loop, move the reason values into
+the driver's SQLCA before `SETSQL` — `SQLCODE = -911` and
+`SQLERRD(3) = 13172872` — then call the program; the forced pair is applied to
+the next `SELKEY`/`UPDATE` only (one-shot). Normal data ops zero `SQLERRD(3)`.
 
 Include `copy/HOSTACCT.cpy` under an `01` in the driver to build/inspect rows;
 it is byte-identical to `HOST-ACCOUNT-ROW`. Account/date fixture conventions:
 keys are fixed-width numeric strings (sort code `"987654"`, account `"00000001"`,
 customer `"0000000001"`), dates are `"YYYY-MM-DD"`. See `tests/unit/updaccTest.cbl`,
-`inqaccTest.cbl`, `inqacccuTest.cbl`.
+`inqaccTest.cbl`, `inqacccuTest.cbl`, `delaccTest.cbl`.
+
+### EXEC SQL / Db2 PROCTRAN audit double — `DB2PROC`
+
+`DB2PROC` is a sibling in-memory table for the **PROCTRAN** processed-transaction
+audit log. The account-mutating programs (`DELACC`, `DBCRFUN`, `XFRFUN`) write
+one audit row per business event; `DB2PROC` records those rows so a driver can
+assert the audit trail. The preprocessor maps `INSERT INTO PROCTRAN` to:
+
+```
+CALL 'DB2PROC' USING BY CONTENT  <op>
+     BY REFERENCE HOST-PROCTRAN-ROW SQLCA
+```
+
+`HOST-PROCTRAN-ROW` is the program's PROCTRAN host group (eyecatcher, sortcode,
+account, date, time, ref, type, description, amount). `copy/HOSTPROC.cpy` is a
+byte-identical driver-side view for building/inspecting rows.
+
+| `op`      | Effect |
+|-----------|--------|
+| `INSERT`  | Append `HOST-PROCTRAN-ROW` (unless a scripted error is pending). |
+| `CLEAR`   | Empty the table and clear scripted-error state (driver). |
+| `SETSQL`  | Force `SQLCODE` on the next `INSERT`; a failed insert leaves the table unchanged (driver). |
+| `COUNT`   | Return the current row count in `SQLERRD(1)` (driver). |
+| `GETLAST` | Copy the most-recently inserted row into `HOST-PROCTRAN-ROW` (driver). |
+| `GETFRST` | Copy the first inserted row into `HOST-PROCTRAN-ROW` (driver). |
+
+Typical assertion pattern: `CLEAR` both tables, seed ACCOUNT rows, call the
+program, then `COUNT` + `GETLAST` on `DB2PROC` to check the audit row's `type`
+(`ODA` account-delete, `CRE`/`DEB` credit/debit, `TFR` transfer) and `amount`.
+See `tests/unit/delaccTest.cbl`, `dbcrfunTest.cbl`, `xfrfunTest.cbl`.
+
+### CICS abend capture — `CICSABND`
+
+Failure paths in these programs `EXEC CICS ABEND ABCODE(xxxx)` instead of
+returning. The preprocessor translates that to a `CALL 'CICSABND'` that stores
+the code, immediately followed by `GOBACK` so nothing runs past the abend. The
+code is held in process-resident state, and the driver reads it with these
+control ops (signature `USING op abcode flag`):
+
+| `op`    | Effect |
+|---------|--------|
+| `READ`  | Return the last abend `abcode` (`X(4)`) and a `flag` (`Y` if an abend fired since the last reset). |
+| `RESET` | Clear the stored code and set `flag` to `N` (call before the program to isolate the assertion). |
+
+So a driver asserts a failure path by `RESET`-ing, calling the program, then
+`READ`-ing and comparing the code — e.g. `SAME` (transfer to same account),
+`FROM`/`TO  ` (account update failed), `HROL` (rollback failed), `WPCD`
+(PROCTRAN write failed), `HWPT` (DELACC PROCTRAN write failed). See
+`tests/unit/xfrfunTest.cbl` for the `SAME` capture.
 
 ### Known gap — `BANKDATA` (not yet testable)
 
