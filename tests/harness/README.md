@@ -89,14 +89,23 @@ test driver.
 | `CICSSYNC` | `SYNCPOINT [ROLLBACK]`              | No-op that always reports NORMAL (error-path only). |
 | `CICSVSAM` | file control: `READ`, `READ UPDATE`, `REWRITE`, `WRITE`, `STARTBR`, `READNEXT`, `READPREV`, `ENDBR` | Process-resident, keyed in-memory VSAM **KSDS** double. See "VSAM (KSDS) data layer" below. |
 | `DB2ACC`   | `EXEC SQL` against `ACCOUNT`        | In-memory ACCOUNT table (see below): keyed SELECT, "last account" SELECT, cursor OPEN/FETCH/CLOSE, UPDATE; driver seeds rows and scripts `SQLCODE`. |
+| `CICSBMS`  | `SEND MAP`, `RECEIVE MAP`, `SEND TEXT`, `SEND CONTROL` | Process-resident 3270 screen buffer. `RECEIVE MAP` copies the driver-preloaded input image into the program; `SEND MAP`/`SEND TEXT` capture the output image for the driver to read back. See "BMS presentation layer" below. |
+| `CICSAID`  | (EIB AID/COMMAREA init, injected)   | Resident holder for the injectable `EIBAID` (which key was pressed) and `EIBCALEN`; the driver `SET`s them, `CICSINIT` reads them into the EIB at program entry. |
+| `CICSRETN` | `RETURN TRANSID(..) [COMMAREA(..)]` | Records the pseudo-conversational hand-off (next transid + saved COMMAREA) so a driver can assert which transaction the screen returned to. |
+| `CICSBIF`  | `BIF DEEDIT FIELD(..)`              | Strips non-digits from a field, right-justifies and zero-fills (as real CICS `DEEDIT`). |
+| `CICSINQA` | `INQUIRE ASSOCIATION(..)`           | Returns canned origin data (applid/userid/facility/network/type) for the screen's COMMAREA. |
+| `LINKREC`  | (behind `CICSLINK`)                 | Capture/scripting store for the single business `LINK` a screen makes: the driver `SCRIPT`s the linked program's reply COMMAREA and `GET`s back the COMMAREA the screen passed in. See "BMS presentation layer" below. |
 
 **CICS verbs stubbed so far:** `DELAY`, `GET CONTAINER`, `PUT CONTAINER`,
 `RETURN`, `LINK`, `ASSIGN` (APPLID/PROGRAM/ABCODE), `ABEND`, `ASKTIME`,
 `FORMATTIME`, `HANDLE ABEND` (disabled to a no-op), `SYNCPOINT`, and the VSAM
 file-control verbs `READ`, `READ UPDATE`, `REWRITE`, `WRITE`, `STARTBR`,
 `READNEXT`, `READPREV`, `ENDBR`. **`EXEC SQL`** against `ACCOUNT` is also
-supported (see the Db2 section below). Other verbs (`ADDRESS`, `GETMAIN`,
-`RETRIEVE`, …) are **not** yet stubbed — add them as needed (below).
+supported (see the Db2 section below). The **BMS / 3270 presentation** verbs
+`SEND MAP`, `RECEIVE MAP`, `SEND TEXT`, `SEND CONTROL`, `RETURN TRANSID(..)
+COMMAREA(..)`, `BIF DEEDIT`, and `INQUIRE ASSOCIATION` are supported too (see
+the BMS section below). Other verbs (`ADDRESS`, `GETMAIN`, `RETRIEVE`, `XCTL`,
+…) are **not** yet stubbed — add them as needed (below).
 
 ### VSAM (KSDS) data layer — `CICSVSAM`
 
@@ -185,6 +194,89 @@ it is byte-identical to `HOST-ACCOUNT-ROW`. Account/date fixture conventions:
 keys are fixed-width numeric strings (sort code `"987654"`, account `"00000001"`,
 customer `"0000000001"`), dates are `"YYYY-MM-DD"`. See `tests/unit/updaccTest.cbl`,
 `inqaccTest.cbl`, `inqacccuTest.cbl`.
+
+### BMS presentation layer — `CICSBMS` / `CICSAID` / `CICSRETN` / `LINKREC`
+
+The CBSA screen programs (`BNKMENU`, `BNK1CRA`, `BNK1CAC`, `BNK1TFN`, …) are
+**pseudo-conversational 3270** programs: on each turn they `RECEIVE MAP` the
+operator's input, branch on the AID (which key was pressed) and `EIBCALEN`
+(first-time-in vs. a saved COMMAREA), do their work — usually a single business
+`LINK` — then `SEND MAP` an output screen and `RETURN TRANSID(..)` to hand off
+to the next transaction. The harness models one such turn end-to-end.
+
+**Symbolic map copybooks.** BMS symbolic maps are normally generated from the
+`.bms` mapset at build time. The original `.bms` sources are never modified;
+instead `harness/generateSymbolicMaps.py` parses each mapset and emits an
+equivalent symbolic-map copybook into `harness/copy/`:
+
+```bash
+# reads the mapsets, writes tests/harness/copy/{BNK1MAI,BNK1CDM,BNK1CAM,BNK1TFM}.cpy
+python3 tests/harness/generateSymbolicMaps.py \
+    src/base/bms_src/BNK1MAI.bms src/base/bms_src/BNK1CDM.bms \
+    src/base/bms_src/BNK1CAM.bms src/base/bms_src/BNK1TFM.bms \
+    --outDir tests/harness/copy
+```
+
+Each field `NAME` yields the standard BMS trio `NAMEL` (input length, `S9(4)
+COMP`), `NAMEF`/`NAMEA` (flag/attribute) and `NAMEI` (input value); the output
+map `…O` fields redefine the same storage. A program `COPY`s the map exactly as
+on z/OS; a driver `COPY`s the same member to preload input and read output.
+
+**One turn, driven from the test:**
+
+```
+CICSAID  SET   -> set EIBAID (PF key) + EIBCALEN         (driver)
+CICSBMS  PUTIN -> preload the operator's input map image (driver)
+LINKREC  SCRIPT-> script the business program's reply     (driver, optional)
+CALL <SCREEN> USING commarea                              (invoke the program)
+CICSBMS  GETOUT-> read back the output map image          (driver)
+CICSRETN GET   -> read the transid it handed off to       (driver)
+LINKREC  GET   -> read the COMMAREA the screen passed in  (driver)
+```
+
+At program entry `CICSINIT` seeds `EIBAID`/`EIBCALEN` from the resident
+`CICSAID` holder (defaults: ENTER, length 0). `RECEIVE MAP` returns the image
+the driver `PUTIN`, and every `SEND MAP`/`SEND TEXT` overwrites the buffer the
+driver reads with `GETOUT`.
+
+**Business `LINK` capture/scripting.** `CICSLINK` forwards every non-`INQCUST`
+`LINK` to the resident `LINKREC` store: it captures the inbound COMMAREA and, if
+the driver scripted a reply for that program, copies the reply back over the
+COMMAREA. This is how a screen test asserts *"the right COMMAREA was passed to
+`DBCRFUN`/`CREACC`/`XFRFUN`"* and injects the business program's response.
+The presentation COMMAREA layouts are program-private WORKING-STORAGE records
+(not copybooks), so each driver declares a byte-compatible mirror to build the
+reply and inspect the capture. Because `LINK PROGRAM('X')` names are fixed
+8-byte fields, the preprocessor space-pads short program/transid literals so the
+captured name is exact (`'CREACC'` → `'CREACC  '`).
+
+**Driver-only control ops** (never emitted by the preprocessor):
+
+| Module     | op        | Effect |
+|------------|-----------|--------|
+| `CICSAID`  | `SET`     | Set `EIBAID` (an AID from `DFHAID`) and `EIBCALEN`. |
+| `CICSBMS`  | `PUTIN`   | Preload the input map image `RECEIVE MAP` will return. |
+| `CICSBMS`  | `GETOUT`  | Read back the last `SEND MAP`/`SEND TEXT` output image. |
+| `CICSBMS`  | `RESET`   | Clear the screen buffer. |
+| `CICSRETN` | `GET`     | Read the recorded next-transid + saved COMMAREA. |
+| `CICSRETN` | `RESET`   | Clear the recorded hand-off. |
+| `LINKREC`  | `SCRIPT`  | Register the reply COMMAREA for a linked program. |
+| `LINKREC`  | `GET`     | Read the captured program name, length and COMMAREA. |
+| `LINKREC`  | `RESET`   | Clear captured + scripted state. |
+
+`DFHAID` (harness copy in `harness/copy/`) provides distinct one-byte AID values
+so a driver's `CICSAID SET DFHENTER` matches the program's `EIBAID = DFHENTER`.
+See `tests/unit/{bnkmenu,bnk1cra,bnk1cac,bnk1tfn}Test.cbl` for the full pattern,
+including `bnk1tfnTest.cbl` which **pins the fail-code-3 fall-through** in
+`BNK1TFN` (the `WHEN '3'` branch lacks the `GO TO GCD999` the other fail codes
+have, so its message is immediately overwritten) as a regression test without
+touching production source.
+
+**Follow-ups (not yet covered):** the multi-turn screens `BNK1DCS`, `BNK1DAC`
+and `BNK1UAC` thread a state flag through the COMMAREA across an Enter→PF-key
+sequence; testing them needs the driver to invoke the screen twice, feeding the
+first turn's returned COMMAREA (via `CICSRETN GET`) back into the second. `XCTL`
+is also not yet stubbed (the CBSA menu uses `RETURN TRANSID`, not `XCTL`).
 
 ### Determinism knobs (environment variables)
 

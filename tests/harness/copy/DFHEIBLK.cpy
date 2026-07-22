@@ -11,3 +11,5 @@
           05 EIBRESP    PIC S9(8) COMP.
           05 EIBRESP2   PIC S9(8) COMP.
           05 EIBTRNID   PIC X(4).
+          05 EIBAID     PIC X.
+          05 EIBCALEN   PIC S9(4) COMP.

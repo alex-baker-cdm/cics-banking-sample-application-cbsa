@@ -5,6 +5,10 @@
       * translated program. Makes the task number (and therefore any
       * RANDOM seed derived from EIBTASKN) injectable and deterministic
       * via the CBSA_TEST_TASKN environment variable.
+      *
+      * For the presentation (BMS) programs it also seeds EIBAID and
+      * EIBCALEN from the resident CICSAID holder, so a test driver can
+      * simulate which key was pressed and whether a COMMAREA was passed.
       ******************************************************************
        IDENTIFICATION DIVISION.
        PROGRAM-ID. CICSINIT.
@@ -13,13 +17,11 @@
        WORKING-STORAGE SECTION.
        01 WS-ENV-TASKN            PIC X(16)  VALUE SPACES.
        01 WS-TASKN-NUM            PIC 9(7)   VALUE 0.
+       01 WS-AID                  PIC X       VALUE QUOTE.
+       01 WS-CALEN                PIC S9(4) COMP VALUE 0.
 
        LINKAGE SECTION.
-       01 DFHEIB-SHIM.
-          05 EIBTASKN   PIC S9(7) COMP-3.
-          05 EIBRESP    PIC S9(8) COMP.
-          05 EIBRESP2   PIC S9(8) COMP.
-          05 EIBTRNID   PIC X(4).
+       COPY DFHEIBLK.
 
        PROCEDURE DIVISION USING DFHEIB-SHIM.
        A010.
@@ -37,5 +39,11 @@
               MOVE FUNCTION NUMVAL(WS-ENV-TASKN) TO WS-TASKN-NUM
               MOVE WS-TASKN-NUM TO EIBTASKN
            END-IF
+
+      *    Seed the attention id / commarea length from the resident
+      *    holder the driver populated (defaults: ENTER, length 0).
+           CALL 'CICSAID' USING 'GET' WS-AID WS-CALEN
+           MOVE WS-AID   TO EIBAID
+           MOVE WS-CALEN TO EIBCALEN
 
            GOBACK.

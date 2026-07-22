@@ -54,8 +54,18 @@ DFHRESP_MAP = {
     "DUPREC": 14,
     "DUPKEY": 15,
     "ENDFILE": 20,
+    "MAPFAIL": 36,
     "SYSIDERR": 53,
 }
+
+# Harness scratch fields injected into WORKING-STORAGE for verbs that must
+# pass a byte length (BMS maps, LINK/RETURN COMMAREAs, DEEDIT fields) or a
+# throwaway COMMAREA reference. See _needs_shim_scratch / translate.
+SHIM_LEN = "WS-SHIM-LEN"
+SHIM_DUMMY = "WS-SHIM-DUMMY"
+
+# EXEC CICS verbs that require the WS-SHIM-LEN / WS-SHIM-DUMMY scratch.
+SCRATCH_VERBS = ("SEND", "RECEIVE", "LINK", "BIF")
 
 # EXEC CICS file-control verbs routed to the CICSVSAM KSDS test double.
 VSAM_FILE_VERBS = (
@@ -92,6 +102,23 @@ def _operands(text):
     return {k.upper(): v.strip() for k, v in pairs}
 
 
+def _pad_lit(token, width):
+    """Pad a quoted literal operand to ``width`` chars (space-filled).
+
+    CICS PROGRAM/TRANSID names are fixed-width (8 / 4). The shims receive
+    them into ``PIC X(width)`` fields, so a short literal like ``'CREACC'``
+    passed BY CONTENT would under-run the receiver and pick up adjacent
+    bytes. Padding the literal here keeps the value exact. Data-name
+    operands (no surrounding quotes) are returned unchanged.
+    """
+    if len(token) >= 2 and token[0] == "'" and token[-1] == "'":
+        inner = token[1:-1]
+        if len(inner) < width:
+            inner = inner.ljust(width)
+        return "'{}'".format(inner)
+    return token
+
+
 def _call(module, refs=None, contents=None, period=False):
     """Build CALL lines. ``contents`` are passed BY CONTENT, ``refs`` BY REFERENCE."""
     lines = []
@@ -107,6 +134,20 @@ def _call(module, refs=None, contents=None, period=False):
         lines.append("{}BY {} {}".format(CONT, mode, val))
     if period:
         lines[-1] = lines[-1] + "."
+    return lines
+
+
+def _bms_call(op, area, ops, period):
+    """Build a BMS terminal double CALL (SEND/RECEIVE MAP, SEND TEXT).
+
+    Emits ``MOVE LENGTH OF area TO WS-SHIM-LEN`` then
+        CALL 'CICSBMS' USING BY CONTENT op(8) len BY REFERENCE area resp resp2
+    """
+    lines = ["{}MOVE LENGTH OF {} TO {}".format(INDENT, area, SHIM_LEN)]
+    lines += _call("CICSBMS",
+                   contents=[op, SHIM_LEN],
+                   refs=[area, ops["RESP"], ops["RESP2"]],
+                   period=period)
     return lines
 
 
@@ -168,8 +209,57 @@ def _translate_block(text, period):
                      period=period)
 
     if verb == "RETURN":
-        # RETURN ends the CICS task -> terminate the run unit.
-        return ["{}GOBACK{}".format(INDENT, "." if period else "")]
+        # A bare RETURN ends the CICS task -> terminate the run unit.
+        # RETURN TRANSID(..) [COMMAREA(..)] is the pseudo-conversational
+        # hand-off: record the next transid + saved COMMAREA, then GOBACK
+        # (the task still ends off-CICS).
+        goback = "{}GOBACK{}".format(INDENT, "." if period else "")
+        if "TRANSID" not in ops:
+            return [goback]
+        commarea = ops.get("COMMAREA")
+        lines = []
+        if commarea:
+            lines.append("{}MOVE LENGTH OF {} TO {}".format(
+                INDENT, commarea, SHIM_LEN))
+            ref = commarea
+        else:
+            lines.append("{}MOVE 0 TO {}".format(INDENT, SHIM_LEN))
+            ref = SHIM_DUMMY
+        lines += _call("CICSRETN",
+                       contents=["'RECORD  '",
+                                 _pad_lit(ops["TRANSID"], 4), SHIM_LEN],
+                       refs=[ref])
+        lines.append(goback)
+        return lines
+
+    if verb == "SEND":
+        # SEND MAP / SEND TEXT / SEND CONTROL to the BMS terminal double.
+        if "MAP" in ops:
+            area = ops["FROM"]
+            return _bms_call("'SEND    '", area, ops, period)
+        if re.search(r"\bTEXT\b", body.upper()):
+            return _bms_call("'TEXT    '", ops["FROM"], ops, period)
+        # SEND CONTROL (no map/data, no RESP in the CBSA screens): no-op.
+        return ["{}CONTINUE{}".format(INDENT, "." if period else "")]
+
+    if verb == "RECEIVE":
+        # RECEIVE MAP: copy the operator's input image into INTO(..).
+        return _bms_call("'RECEIVE '", ops["INTO"], ops, period)
+
+    if verb == "BIF":
+        # BIF DEEDIT FIELD(x): strip non-digits, right-justify, zero-fill.
+        field = ops["FIELD"]
+        lines = ["{}MOVE LENGTH OF {} TO {}".format(INDENT, field, SHIM_LEN)]
+        lines += _call("CICSBIF",
+                       contents=[SHIM_LEN], refs=[field], period=period)
+        return lines
+
+    if verb == "INQUIRE" and "ASSOCIATION" in ops:
+        return _call("CICSINQA",
+                     refs=[ops["ODAPPLID"], ops["ODUSERID"],
+                           ops["ODFACILNAME"], ops["ODNETWORKID"],
+                           ops["ODFACILTYPE"]],
+                     period=period)
 
     if verb == "DELAY":
         return _call("CICSDLAY",
@@ -194,12 +284,23 @@ def _translate_block(text, period):
 
     if verb == "LINK":
         # PROGRAM may be a literal ('INQCUST ') or a data name; pass BY
-        # CONTENT so both work. COMMAREA is a data name (BY REFERENCE) so
-        # a stub can return values into it.
-        return _call("CICSLINK",
-                     contents=[ops["PROGRAM"]],
-                     refs=[ops.get("COMMAREA", "OMITTED")],
-                     period=period)
+        # CONTENT so both work. The COMMAREA (BY REFERENCE) is preceded by
+        # its byte length so CICSLINK/LINKREC can capture + reply to it
+        # without knowing the layout.
+        commarea = ops.get("COMMAREA")
+        lines = []
+        if commarea:
+            lines.append("{}MOVE LENGTH OF {} TO {}".format(
+                INDENT, commarea, SHIM_LEN))
+            ref = commarea
+        else:
+            lines.append("{}MOVE 0 TO {}".format(INDENT, SHIM_LEN))
+            ref = SHIM_DUMMY
+        lines += _call("CICSLINK",
+                       contents=[_pad_lit(ops["PROGRAM"], 8), SHIM_LEN],
+                       refs=[ref],
+                       period=period)
+        return lines
 
     if verb == "ASSIGN":
         # ASSIGN APPLID(x) / PROGRAM(x) / ABCODE(x): pass field name + receiver.
@@ -313,6 +414,14 @@ def translate(lines):
         and re.match(r"01\s+DFHCOMMAREA\b", _code(ln).strip().upper())
         for ln in lines
     )
+    # Verbs that pass a byte length / dummy reference need scratch fields
+    # (WS-SHIM-LEN, WS-SHIM-DUMMY) declared in WORKING-STORAGE.
+    needs_scratch = any(
+        (not _is_comment(ln))
+        and re.search(r"\bEXEC\s+CICS\s+({})\b".format("|".join(SCRATCH_VERBS)),
+                      _code(ln).upper())
+        for ln in lines
+    )
 
     i = 0
     n = len(lines)
@@ -328,8 +437,16 @@ def translate(lines):
         stripped = code.strip()
         upper = stripped.upper()
 
-        # Comment out compiler-directing statements (CBL / PROCESS).
-        if upper.startswith("CBL ") or upper == "CBL" or upper.startswith("PROCESS"):
+        # Comment out compiler-directing statements (CBL / PROCESS). Guard
+        # against COBOL paragraph/section names that merely start with the
+        # word (e.g. "PROCESS-MENU-MAP SECTION."): a real directive is the
+        # bare word or the word followed by a space + options.
+        is_directive = (
+            upper in ("CBL", "PROCESS")
+            or upper.startswith("CBL ")
+            or upper.startswith("PROCESS ")
+        )
+        if is_directive and not upper.rstrip(".").endswith("SECTION"):
             out.append("      *" + line[CODE_START:])
             i += 1
             continue
@@ -354,10 +471,17 @@ def translate(lines):
             i = j + 1
             continue
 
-        # Insert EIB shim copybook right after WORKING-STORAGE SECTION.
-        if uses_eib and re.match(r"WORKING-STORAGE\s+SECTION\.", upper):
+        # Insert EIB shim copybook + harness scratch right after
+        # WORKING-STORAGE SECTION.
+        if (uses_eib or needs_scratch) and re.match(
+                r"WORKING-STORAGE\s+SECTION\.", upper):
             out.append(line)
-            out.append("{}COPY DFHEIBLK.".format(INDENT))
+            if uses_eib:
+                out.append("{}COPY DFHEIBLK.".format(INDENT))
+            if needs_scratch:
+                out.append("       01 {} PIC 9(9) COMP-5 VALUE 0.".format(
+                    SHIM_LEN))
+                out.append("       01 {} PIC X VALUE SPACE.".format(SHIM_DUMMY))
             i += 1
             continue
 
