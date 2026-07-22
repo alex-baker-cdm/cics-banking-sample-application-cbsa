@@ -21,7 +21,9 @@ Design goals:
 
 Supported verbs (see README for how to add more):
   RETURN, DELAY, GET CONTAINER, PUT CONTAINER, LINK, ASSIGN, ABEND,
-  ASKTIME, FORMATTIME.
+  ASKTIME, FORMATTIME, HANDLE ABEND, SYNCPOINT, and the VSAM/KSDS file
+  verbs READ, READ UPDATE, REWRITE, WRITE, STARTBR, READNEXT, READPREV,
+  ENDBR (all routed to the CICSVSAM in-memory KSDS double).
 
 Usage:
   python3 cicsPreprocessor.py <path-to-source.cbl>  > translated.cbl
@@ -38,7 +40,17 @@ import sys
 # programs; extend this map as new programs are added.
 DFHRESP_MAP = {
     "NORMAL": 0,
+    "NOTFND": 13,
+    "DUPREC": 14,
+    "DUPKEY": 15,
+    "ENDFILE": 20,
+    "SYSIDERR": 53,
 }
+
+# EXEC CICS file-control verbs routed to the CICSVSAM KSDS test double.
+VSAM_FILE_VERBS = (
+    "READ", "REWRITE", "WRITE", "STARTBR", "READNEXT", "READPREV", "ENDBR",
+)
 
 # Indentation (Area B, column 12) for generated statements.
 INDENT = " " * 11
@@ -74,11 +86,52 @@ def _call(module, refs=None, contents=None, period=False):
     return lines
 
 
+def _vsam_call(verb, body, ops, period):
+    """Route an EXEC CICS file-control verb to the CICSVSAM KSDS double.
+
+    Uniform signature (positional):
+        CALL 'CICSVSAM' USING BY CONTENT op(8) file(8)
+             BY REFERENCE ridfld|OMITTED record|OMITTED resp resp2
+    Operands a given verb does not carry (e.g. RIDFLD on REWRITE/ENDBR, or
+    the record on STARTBR/ENDBR) are passed OMITTED; the shim only touches
+    the ones relevant to that op.
+    """
+    op = verb
+    if verb == "READ" and re.search(r"\bUPDATE\b", body.upper()):
+        op = "RDUPD"
+    fileLit = ops.get("FILE", "'CUSTOMER'")
+    rid = ops.get("RIDFLD", "OMITTED")
+    if verb in ("READ", "READNEXT", "READPREV"):
+        rec = ops.get("INTO", "OMITTED")
+    elif verb in ("REWRITE", "WRITE"):
+        rec = ops.get("FROM", "OMITTED")
+    else:
+        rec = "OMITTED"
+    return _call("CICSVSAM",
+                 contents=["'{}'".format(op.ljust(8)), fileLit],
+                 refs=[rid, rec, ops["RESP"], ops["RESP2"]],
+                 period=period)
+
+
 def _translate_block(text, period):
     """Translate a single flattened ``EXEC CICS ...`` block into COBOL lines."""
     body = text.split("CICS", 1)[1].strip()
     verb = body.split("(", 1)[0].split()[0].upper()
     ops = _operands(body)
+
+    if verb in VSAM_FILE_VERBS:
+        return _vsam_call(verb, body, ops, period)
+
+    if verb == "HANDLE":
+        # HANDLE ABEND / HANDLE CONDITION: no equivalent off-CICS. The error
+        # paths these guard are not exercised by the unit tests, so disable
+        # the handler (a no-op) instead of faking a branch.
+        return ["{}CONTINUE{}".format(INDENT, "." if period else "")]
+
+    if verb == "SYNCPOINT":
+        return _call("CICSSYNC",
+                     refs=[ops["RESP"], ops["RESP2"]],
+                     period=period)
 
     if verb == "RETURN":
         # RETURN ends the CICS task -> terminate the run unit.
@@ -86,7 +139,9 @@ def _translate_block(text, period):
 
     if verb == "DELAY":
         return _call("CICSDLAY",
-                     refs=[ops["SECONDS"], ops["RESP"], ops["RESP2"]],
+                     refs=[ops["SECONDS"],
+                           ops.get("RESP", "OMITTED"),
+                           ops.get("RESP2", "OMITTED")],
                      period=period)
 
     if verb == "GET" and "CONTAINER" in ops:
@@ -109,12 +164,14 @@ def _translate_block(text, period):
                      period=period)
 
     if verb == "ASSIGN":
-        # ASSIGN APPLID(x) or ASSIGN PROGRAM(x): pass which field + receiver.
-        key = "APPLID" if "APPLID" in ops else "PROGRAM"
-        return _call("CICSASGN",
-                     contents=["'{}'".format(key.ljust(8))],
-                     refs=[ops[key]],
-                     period=period)
+        # ASSIGN APPLID(x) / PROGRAM(x) / ABCODE(x): pass field name + receiver.
+        for key in ("APPLID", "PROGRAM", "ABCODE"):
+            if key in ops:
+                return _call("CICSASGN",
+                             contents=["'{}'".format(key.ljust(8))],
+                             refs=[ops[key]],
+                             period=period)
+        raise ValueError("Unsupported EXEC CICS ASSIGN operands: {!r}".format(body))
 
     if verb == "ABEND":
         return _call("CICSABND", contents=[ops["ABCODE"]], period=period)
@@ -154,6 +211,14 @@ def translate(lines):
     out = []
     uses_eib = any(
         (not _is_comment(ln)) and re.search(r"\bEIB[A-Z0-9]*\b", _code(ln))
+        for ln in lines
+    )
+    # A DFHCOMMAREA declared in LINKAGE is addressed automatically by the
+    # real CICS translator. Off-CICS we must bind it as a PROCEDURE DIVISION
+    # parameter so the driver's CALL ... USING commarea connects it.
+    has_commarea = any(
+        (not _is_comment(ln))
+        and re.match(r"01\s+DFHCOMMAREA\b", _code(ln).strip().upper())
         for ln in lines
     )
 
@@ -200,12 +265,17 @@ def translate(lines):
             i += 1
             continue
 
-        # Insert shim init (populates EIB fields) at the top of the procedure.
-        if uses_eib and re.match(r"PROCEDURE\s+DIVISION", upper):
-            out.append(line)
-            out.append("       CBSA-SHIM-INIT SECTION.")
-            out.append("       CBSA-SHIM-INIT-P.")
-            out.append("{}CALL 'CICSINIT' USING DFHEIB-SHIM.".format(INDENT))
+        # Bind DFHCOMMAREA and inject the EIB shim init at the procedure top.
+        if re.match(r"PROCEDURE\s+DIVISION", upper):
+            if has_commarea and "USING" not in upper:
+                out.append(line[:CODE_START]
+                           + "PROCEDURE DIVISION USING DFHCOMMAREA.")
+            else:
+                out.append(line)
+            if uses_eib:
+                out.append("       CBSA-SHIM-INIT SECTION.")
+                out.append("       CBSA-SHIM-INIT-P.")
+                out.append("{}CALL 'CICSINIT' USING DFHEIB-SHIM.".format(INDENT))
             i += 1
             continue
 

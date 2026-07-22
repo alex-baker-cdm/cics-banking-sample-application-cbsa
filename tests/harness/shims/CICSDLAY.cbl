@@ -19,10 +19,15 @@
        01 LK-RESP                 PIC S9(8) COMP.
        01 LK-RESP2                PIC S9(8) COMP.
 
-       PROCEDURE DIVISION USING LK-SECONDS LK-RESP LK-RESP2.
+       PROCEDURE DIVISION USING LK-SECONDS
+                                OPTIONAL LK-RESP OPTIONAL LK-RESP2.
        A010.
-           MOVE 0 TO LK-RESP
-           MOVE 0 TO LK-RESP2
+           IF LK-RESP IS NOT OMITTED
+              MOVE 0 TO LK-RESP
+           END-IF
+           IF LK-RESP2 IS NOT OMITTED
+              MOVE 0 TO LK-RESP2
+           END-IF
 
            MOVE SPACES TO WS-MODE
            ACCEPT WS-MODE FROM ENVIRONMENT "CBSA_TEST_DELAY_MODE"

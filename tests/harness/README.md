@@ -79,11 +79,61 @@ test driver.
 | `CICSABND` | `ABEND ABCODE(..)`                  | Records the abend code (error-path only). |
 | `CICSTIME` | `ASKTIME ABSTIME(..)`               | Returns a fixed ABSTIME (error-path only). |
 | `CICSFTIM` | `FORMATTIME`                        | Returns a fixed date/time (error-path only). |
+| `CICSSYNC` | `SYNCPOINT [ROLLBACK]`              | No-op that always reports NORMAL (error-path only). |
+| `CICSVSAM` | file control: `READ`, `READ UPDATE`, `REWRITE`, `WRITE`, `STARTBR`, `READNEXT`, `READPREV`, `ENDBR` | Process-resident, keyed in-memory VSAM **KSDS** double. See "VSAM (KSDS) data layer" below. |
 
 **CICS verbs stubbed so far:** `DELAY`, `GET CONTAINER`, `PUT CONTAINER`,
-`RETURN`, `LINK`, `ASSIGN` (APPLID/PROGRAM), `ABEND`, `ASKTIME`, `FORMATTIME`.
+`RETURN`, `LINK`, `ASSIGN` (APPLID/PROGRAM/ABCODE), `ABEND`, `ASKTIME`,
+`FORMATTIME`, `HANDLE ABEND` (disabled to a no-op), `SYNCPOINT`, and the VSAM
+file-control verbs `READ`, `READ UPDATE`, `REWRITE`, `WRITE`, `STARTBR`,
+`READNEXT`, `READPREV`, `ENDBR`.
 `EXEC SQL` and other verbs (`ADDRESS`, `GETMAIN`, `RETRIEVE`, …) are **not** yet
-stubbed — they are not used by the Layer-0 programs. Add them as needed (below).
+stubbed — they are not used by the programs handled so far. Add them as needed
+(below).
+
+### VSAM (KSDS) data layer — `CICSVSAM`
+
+`CICSVSAM` is a process-resident, keyed in-memory KSDS store (same "resident
+module = shared state" trick as `CICSCONT`). A test driver seeds fixture
+records into it, then calls the program under test, which reads / updates /
+browses the very same store. The preprocessor rewrites every file-control verb
+into one uniform call:
+
+```
+CALL 'CICSVSAM' USING BY CONTENT  op(8) file(8)
+     BY REFERENCE ridfld|OMITTED record|OMITTED resp resp2
+```
+
+Operands a verb does not carry (e.g. `RIDFLD` on `REWRITE`/`ENDBR`, or the
+record on `STARTBR`/`ENDBR`) are passed `OMITTED`; the shim only touches the
+ones relevant to each op. `READ ... UPDATE` remembers the key so the following
+`REWRITE` targets the right record. Browse ops keep an internal cursor:
+`STARTBR` positions at/around the `RIDFLD` (so `STARTBR(HIGH-VALUES)` +
+`READPREV` returns the highest-key record), and `READNEXT`/`READPREV` walk the
+keys in order, writing the found key back into `RIDFLD` like real VSAM.
+
+RESP codes mirror real CICS/VSAM so program control flow is unchanged:
+`NORMAL=0`, `NOTFND=13`, `DUPREC=14`, `ENDFILE=20` (all in `DFHRESP_MAP`).
+
+**Driver-only control ops** (called directly from the test driver, never
+emitted by the preprocessor):
+
+| op         | Effect |
+|------------|--------|
+| `RESET   ` | Empty the store and clear all cursor/update state. |
+| `SEED    ` | Insert/replace a fixture record; the key is read from the record image (cols 5-20 = `CUSTOMER-KEY`). Pass the 259-byte record via the `record` operand and `OMITTED` for `ridfld`. |
+| `FORCERSP` | Script the RESP the **next** file verb returns (value passed via the `resp` operand), to drive an arbitrary error path. |
+
+The record image the driver seeds is the `CUSTOMER` copybook layout (259
+bytes). See `tests/unit/updcustTest.cbl` and `tests/unit/inqcustTest.cbl` for
+the seed / call / assert pattern, including deterministic exercise of the
+`INQCUST` random-customer and last-customer browse paths via `CBSA_TEST_TASKN`.
+
+**Binding `DFHCOMMAREA`:** on the mainframe the CICS translator addresses
+`DFHCOMMAREA` automatically, so some programs (e.g. `UPDCUST`) write
+`PROCEDURE DIVISION.` with no `USING`. Off-CICS the preprocessor detects a
+`01 DFHCOMMAREA` in the LINKAGE SECTION and appends `USING DFHCOMMAREA` to the
+`PROCEDURE DIVISION` header so the driver's `CALL ... USING commarea` connects.
 
 ### Determinism knobs (environment variables)
 

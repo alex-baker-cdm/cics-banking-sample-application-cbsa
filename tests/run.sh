@@ -35,7 +35,7 @@ harnessCopy="${harnessDir}/copy"
 preprocessor="${harnessDir}/cicsPreprocessor.py"
 
 # Programs under test (source base name = PROGRAM-ID = module file name).
-programsUnderTest=(CRDTAGY1 GETCOMPY GETSCODE)
+programsUnderTest=(CRDTAGY1 GETCOMPY GETSCODE UPDCUST INQCUST)
 
 # Deterministic seed for RANDOM (via EIBTASKN) and a no-op DELAY.
 export CBSA_TEST_TASKN="${CBSA_TEST_TASKN:-1}"
