@@ -1,29 +1,39 @@
 #!/usr/bin/env python3
 """cicsPreprocessor.py
 
-Lightweight EXEC CICS -> CALL translator for the CBSA isolated-test harness.
+Lightweight EXEC CICS / EXEC SQL -> CALL translator for the CBSA
+isolated-test harness.
 
-GnuCOBOL (cobc) does not understand IBM's ``EXEC CICS`` / ``EXEC SQL`` verbs.
-Rather than run the full z/OS CICS translator, this preprocessor rewrites the
-*specific* CICS verbs used by the CBSA Layer-0 programs (CRDTAGY1, GETCOMPY,
-GETSCODE) into plain ``CALL`` statements that target small COBOL stub modules
-(see ``tests/harness/shims``). The original ``.cbl`` sources are never modified;
-the translated copy is written to stdout and compiled from the build directory,
-so the very same sources still build unchanged for the mainframe.
+GnuCOBOL (cobc) does not understand IBM's ``EXEC CICS`` / ``EXEC SQL``
+verbs. Rather than run the full z/OS CICS+Db2 translator, this
+preprocessor rewrites the *specific* verbs used by the CBSA programs
+under test into plain ``CALL`` statements that target small COBOL stub
+modules (see ``tests/harness/shims``). The original ``.cbl`` sources are
+never modified; the translated copy is written to stdout and compiled
+from the build directory, so the very same sources still build unchanged
+for the mainframe.
 
 Design goals:
-  * Fixed-format friendly. Every in-place substitution (e.g. ``DFHRESP(...)``)
-    is padded to the exact width of the text it replaces so that no column
-    positions shift. Whole ``EXEC CICS ... END-EXEC`` blocks are replaced by
-    freshly generated lines that we control, kept within column 72.
-  * Minimal + explicit. Only the verbs these programs actually use are handled;
-    an unknown verb raises so the gap is obvious instead of silently faked.
+  * Fixed-format friendly. Every in-place substitution (e.g.
+    ``DFHRESP(...)``) is padded to the exact width of the text it
+    replaces so that no column positions shift. Whole
+    ``EXEC ... END-EXEC`` blocks are replaced by freshly generated lines
+    that we control, kept within column 72.
+  * Minimal + explicit. Only the verbs these programs actually use are
+    handled; an unknown verb raises so the gap is obvious instead of
+    being silently faked.
 
-Supported verbs (see README for how to add more):
-  RETURN, DELAY, GET CONTAINER, PUT CONTAINER, LINK, ASSIGN, ABEND,
-  ASKTIME, FORMATTIME, HANDLE ABEND, SYNCPOINT, and the VSAM/KSDS file
-  verbs READ, READ UPDATE, REWRITE, WRITE, STARTBR, READNEXT, READPREV,
-  ENDBR (all routed to the CICSVSAM in-memory KSDS double).
+Supported EXEC CICS verbs (see README for how to add more):
+  RETURN, DELAY, GET CONTAINER, PUT CONTAINER, LINK,
+  ASSIGN (APPLID/PROGRAM/ABCODE), ABEND, ASKTIME, FORMATTIME,
+  HANDLE (ABEND), SYNCPOINT, and the VSAM/KSDS file verbs READ,
+  READ UPDATE, REWRITE, WRITE, STARTBR, READNEXT, READPREV, ENDBR
+  (all routed to the CICSVSAM in-memory KSDS double).
+
+Supported EXEC SQL statements (Db2 ACCOUNT table double, see DB2ACC):
+  INCLUDE SQLCA / INCLUDE <table copybook>, DECLARE CURSOR,
+  SELECT .. INTO (keyed and "ORDER BY .. DESC FETCH FIRST 1"),
+  UPDATE, OPEN, FETCH, CLOSE.
 
 Usage:
   python3 cicsPreprocessor.py <path-to-source.cbl>  > translated.cbl
@@ -36,8 +46,8 @@ import sys
 # Configuration
 # ---------------------------------------------------------------------------
 
-# DFHRESP(name) -> numeric condition value. Only NORMAL is used by the Layer-0
-# programs; extend this map as new programs are added.
+# DFHRESP(name) -> numeric condition value. Only NORMAL is used by the
+# programs under test; extend this map as new programs are added.
 DFHRESP_MAP = {
     "NORMAL": 0,
     "NOTFND": 13,
@@ -60,6 +70,20 @@ CONT = " " * 16  # continuation indent for USING operands
 CODE_START = 7
 # Right margin of the source area in fixed-format COBOL.
 MARGIN_R = 72
+
+# The programs under test hold their 12 Db2 ACCOUNT host variables in a
+# group with this name; the SQL translation passes that group as the row
+# buffer to DB2ACC. New programs added to the SQL harness must follow the
+# same convention (see tests/harness/README.md).
+ROW_GROUP = "HOST-ACCOUNT-ROW"
+
+# The three key host variables the DB2ACC calling convention passes. They
+# exist (with these names/widths) in every program that uses the ACCOUNT
+# SQL double.
+KEY_SORTCODE = "HV-ACCOUNT-SORTCODE"
+KEY_ACCNO = "HV-ACCOUNT-ACC-NO"
+KEY_CUSTNO = "HV-ACCOUNT-CUST-NO"
+SQLCODE_FIELD = "SQLCODE"
 
 
 def _operands(text):
@@ -113,6 +137,16 @@ def _vsam_call(verb, body, ops, period):
                  period=period)
 
 
+def _db2_call(op, period):
+    """Build a CALL to the DB2ACC double with the fixed harness signature."""
+    return _call(
+        "DB2ACC",
+        contents=["'{}'".format(op.ljust(8))],
+        refs=[KEY_SORTCODE, KEY_ACCNO, KEY_CUSTNO, ROW_GROUP, SQLCODE_FIELD],
+        period=period,
+    )
+
+
 def _translate_block(text, period):
     """Translate a single flattened ``EXEC CICS ...`` block into COBOL lines."""
     body = text.split("CICS", 1)[1].strip()
@@ -159,8 +193,12 @@ def _translate_block(text, period):
                      period=period)
 
     if verb == "LINK":
+        # PROGRAM may be a literal ('INQCUST ') or a data name; pass BY
+        # CONTENT so both work. COMMAREA is a data name (BY REFERENCE) so
+        # a stub can return values into it.
         return _call("CICSLINK",
-                     refs=[ops["PROGRAM"], ops.get("COMMAREA", "OMITTED")],
+                     contents=[ops["PROGRAM"]],
+                     refs=[ops.get("COMMAREA", "OMITTED")],
                      period=period)
 
     if verb == "ASSIGN":
@@ -187,6 +225,58 @@ def _translate_block(text, period):
     raise ValueError("Unsupported EXEC CICS verb: {!r}".format(verb))
 
 
+def _comment(text):
+    """Return a fixed-format comment line carrying ``text`` (kept < col 72)."""
+    return ("      *" + " HARNESS: " + text)[:MARGIN_R]
+
+
+def _translate_sql_block(text, period, ctx):
+    """Translate a single flattened ``EXEC SQL ...`` block into COBOL lines."""
+    body = text.split("SQL", 1)[1].strip()
+    upper = body.upper()
+    verb = upper.split()[0]
+
+    if verb == "INCLUDE":
+        member = upper.split()[1]
+        if member == "SQLCA":
+            # The SQL communications area -> harness copybook.
+            return ["{}COPY SQLCA.".format(INDENT)]
+        # A DECLARE TABLE copybook (e.g. ACCDB2): purely declarative for
+        # the Db2 precompiler, no runtime effect off-Db2 -> drop it.
+        return [_comment("dropped EXEC SQL INCLUDE {}".format(member))]
+
+    if verb == "DECLARE" and "CURSOR" in upper:
+        # Cursor declaration: no runtime action, but capture the WHERE
+        # predicate columns so OPEN knows which filter to apply.
+        where = upper.split("WHERE", 1)[1] if "WHERE" in upper else ""
+        where = where.split("FOR FETCH", 1)[0]
+        ctx["cursor_mode"] = "C" if "CUSTOMER_NUMBER" in where else "A"
+        return [_comment("DECLARE CURSOR captured (mode {})".format(
+            ctx["cursor_mode"]))]
+
+    if verb == "SELECT" and "INTO" in upper:
+        # Two shapes: a keyed single-row SELECT, or the "last account"
+        # SELECT (ORDER BY ACCOUNT_NUMBER DESC FETCH FIRST 1 ROW).
+        if "ORDER BY" in upper and "DESC" in upper:
+            return _db2_call("SELMAX", period)
+        return _db2_call("SELKEY", period)
+
+    if verb == "UPDATE":
+        return _db2_call("UPDATE", period)
+
+    if verb == "OPEN":
+        op = "OPENC" if ctx.get("cursor_mode") == "C" else "OPENA"
+        return _db2_call(op, period)
+
+    if verb == "FETCH":
+        return _db2_call("FETCH", period)
+
+    if verb == "CLOSE":
+        return _db2_call("CLOSE", period)
+
+    raise ValueError("Unsupported EXEC SQL statement: {!r}".format(body))
+
+
 def _replace_dfhresp(line):
     """Replace DFHRESP(NAME) with its numeric value, padded to equal width."""
     def repl(m):
@@ -209,6 +299,8 @@ def _code(line):
 
 def translate(lines):
     out = []
+    ctx = {"cursor_mode": "A"}
+
     uses_eib = any(
         (not _is_comment(ln)) and re.search(r"\bEIB[A-Z0-9]*\b", _code(ln))
         for ln in lines
@@ -242,8 +334,9 @@ def translate(lines):
             i += 1
             continue
 
-        # Detect start of an EXEC CICS block.
-        if re.match(r"EXEC\s+CICS\b", upper):
+        # Detect start of an EXEC CICS / EXEC SQL block.
+        exec_match = re.match(r"EXEC\s+(CICS|SQL)\b", upper)
+        if exec_match:
             block = [code]
             j = i
             while "END-EXEC" not in _code(lines[j]).upper():
@@ -254,7 +347,10 @@ def translate(lines):
             period = "." in tail
             flat = " ".join(seg.strip() for seg in block)
             flat = flat.split("END-EXEC", 1)[0]
-            out.extend(_translate_block(flat, period))
+            if exec_match.group(1) == "SQL":
+                out.extend(_translate_sql_block(flat, period, ctx))
+            else:
+                out.extend(_translate_block(flat, period))
             i = j + 1
             continue
 
@@ -265,13 +361,18 @@ def translate(lines):
             i += 1
             continue
 
-        # Bind DFHCOMMAREA and inject the EIB shim init at the procedure top.
+        # PROCEDURE DIVISION: inject USING DFHCOMMAREA when needed, and the
+        # EIB shim init when the program references the EIB.
         if re.match(r"PROCEDURE\s+DIVISION", upper):
+            header = line
             if has_commarea and "USING" not in upper:
-                out.append(line[:CODE_START]
-                           + "PROCEDURE DIVISION USING DFHCOMMAREA.")
-            else:
-                out.append(line)
+                fixed = _code(line).rstrip()
+                if fixed.endswith("."):
+                    fixed = fixed[:-1].rstrip() + " USING DFHCOMMAREA."
+                else:
+                    fixed = fixed + " USING DFHCOMMAREA"
+                header = line[:CODE_START] + fixed
+            out.append(header)
             if uses_eib:
                 out.append("       CBSA-SHIM-INIT SECTION.")
                 out.append("       CBSA-SHIM-INIT-P.")
