@@ -25,7 +25,7 @@
        01 WS-SC                           PIC X(6)  VALUE "987654".
        01 WS-AN                           PIC X(8)  VALUE SPACES.
        01 WS-CN                           PIC X(10) VALUE SPACES.
-       01 WS-SQL                          PIC S9(9) COMP-5 VALUE 0.
+       COPY SQLCA.
 
        01 OP-CLEAR                        PIC X(8) VALUE "CLEAR".
        01 OP-INSERT                       PIC X(8) VALUE "INSERT".
@@ -66,8 +66,8 @@
       *    Re-SELECT the row to prove the UPDATE was persisted.
            MOVE "00000001" TO WS-AN
            CALL 'DB2ACC' USING OP-SELKEY WS-SC WS-AN WS-CN
-                               FIX-ROW WS-SQL
-           IF WS-SQL = 0 AND FIX-TYPE = "LOAN    "
+                               FIX-ROW SQLCA
+           IF SQLCODE = 0 AND FIX-TYPE = "LOAN    "
               AND FIX-OVERDRAFT = 750 AND FIX-RATE = 2.75
               DISPLAY "PASS: row rewritten in table"
            ELSE
@@ -94,9 +94,9 @@
 
       *    ---- Test 3: scripted Db2 error on SELECT (SETSQL) ----
            PERFORM SEED-TABLE
-           MOVE -911 TO WS-SQL
+           MOVE -911 TO SQLCODE
            CALL 'DB2ACC' USING OP-SETSQL WS-SC WS-AN WS-CN
-                               FIX-ROW WS-SQL
+                               FIX-ROW SQLCA
            INITIALIZE WS-COMM
            MOVE 1          TO COMM-ACCNO
            MOVE "LOAN    "  TO COMM-ACC-TYPE
@@ -124,7 +124,7 @@
       *    Reset the double and insert a single known account row.
        SEED-TABLE.
            CALL 'DB2ACC' USING OP-CLEAR WS-SC WS-AN WS-CN
-                               FIX-ROW WS-SQL
+                               FIX-ROW SQLCA
            MOVE "ACCT"       TO FIX-EYE
            MOVE "0000000001" TO FIX-CUSTNO
            MOVE "987654"     TO FIX-SORTCODE
@@ -138,4 +138,4 @@
            MOVE 1000.00      TO FIX-AVAILBAL
            MOVE 1000.00      TO FIX-ACTUALBAL
            CALL 'DB2ACC' USING OP-INSERT WS-SC WS-AN WS-CN
-                               FIX-ROW WS-SQL.
+                               FIX-ROW SQLCA.
