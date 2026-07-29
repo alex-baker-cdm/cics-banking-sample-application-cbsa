@@ -1,0 +1,33 @@
+flowchart TB
+    subgraph LEGACY["CBSA legacy stores (no PK / FK / CHECK)"]
+        direction LR
+        C["CONTROL<br/>key/value counters<br/>'sc-ACCOUNT-LAST' / '-COUNT'"]
+        A["ACCOUNT (Db2)<br/>eyecatcher, sortcode dup,<br/>free-text type, CHAR dates"]
+        P["PROCTRAN (Db2)<br/>heap, no keys,<br/>polymorphic DESC, DATE+TIME"]
+        V["CUSTOMER (VSAM)<br/>NAME X(60), ADDRESS X(160)"]
+    end
+
+    subgraph PG["PostgreSQL (3NF)"]
+        direction LR
+        BR["branch"]
+        AT["account_type (lookup)"]
+        CU["customer<br/>name/address split"]
+        AC["account<br/>FKs + overdraft CHECK"]
+        TT["transaction_type (lookup)"]
+        TX["account_transaction<br/>occurred_at TIMESTAMP"]
+        TD["transfer_detail<br/>from DESC"]
+        SEQ["account_number_seq<br/>customer_number_seq"]
+        VW["branch_account_count (view)"]
+    end
+
+    A -->|sort code de-duped| BR
+    V -->|sort code de-duped| BR
+    P -->|sort code de-duped| BR
+    A -->|free-text type| AT
+    V --> CU
+    A --> AC
+    P --> TX
+    P -->|type codes| TT
+    P -->|transfer counterparty| TD
+    C -->|ACCOUNT-LAST| SEQ
+    C -->|ACCOUNT-COUNT drift fixed| VW
