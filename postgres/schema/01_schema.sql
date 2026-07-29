@@ -98,7 +98,12 @@ CREATE TABLE account (
     available_balance    NUMERIC(12,2) NOT NULL DEFAULT 0,
     actual_balance       NUMERIC(12,2) NOT NULL DEFAULT 0,
     CONSTRAINT uq_account_natural UNIQUE (sort_code, account_number),
-    -- CBSA rule (DBCRFUN facility 496): a debit may not breach the overdraft.
+    -- Defensive invariant (stricter than legacy CBSA). CBSA did NOT enforce an
+    -- overdraft-limit bound: DBCRFUN only rejects a debit when the resulting
+    -- balance would go below zero, and only for the payment facility
+    -- (COMM-FACILTYPE=496); teller debits and interest/fee postings were
+    -- unbounded. Relax or drop this if migrating real data whose balances can
+    -- legitimately fall below -overdraft_limit (e.g. LOAN/MORTGAGE debt).
     CONSTRAINT ck_account_overdraft CHECK (available_balance >= -overdraft_limit)
 );
 

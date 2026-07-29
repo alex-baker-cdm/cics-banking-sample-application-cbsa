@@ -15,7 +15,9 @@ SET search_path TO cbsa;
 -- Next account / customer numbers. CBSA numbers are per sort code; with a single
 -- demo sort code a global sequence is sufficient. For true multi-branch numbering
 -- use one sequence per branch (see postgres/docs/MIGRATION.md).
-CREATE SEQUENCE IF NOT EXISTS account_number_seq  AS BIGINT START 1 MINVALUE 1 MAXVALUE 99999999;
+-- MAXVALUE stops at 99999998: 99999999 is a reserved CBSA sentinel meaning
+-- "return the highest account number for this sort code" (INQACC path b).
+CREATE SEQUENCE IF NOT EXISTS account_number_seq  AS BIGINT START 1 MINVALUE 1 MAXVALUE 99999998;
 CREATE SEQUENCE IF NOT EXISTS customer_number_seq AS BIGINT START 1 MINVALUE 1 MAXVALUE 9999999999;
 
 -- Derived account count per branch (replaces the drift-prone ACCOUNT-COUNT row).

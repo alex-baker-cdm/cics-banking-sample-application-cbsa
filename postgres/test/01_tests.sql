@@ -7,7 +7,6 @@ DO $$
 DECLARE
     v_turing   BIGINT;
     v_cur_acc  BIGINT;
-    v_sav_acc  BIGINT;
     v_lov_acc  BIGINT;
     v_txn      BIGINT;
     v_count    BIGINT;
@@ -39,7 +38,7 @@ BEGIN
     ---------------------------------------------------------------------------
     -- 3. Natural-key uniqueness (sort_code, account_number).
     ---------------------------------------------------------------------------
-    SELECT account_id, account_number INTO v_cur_acc, v_sav_acc
+    SELECT account_id INTO v_cur_acc
     FROM account WHERE customer_id = v_turing AND account_type_code = 'CURRENT ';
     BEGIN
         INSERT INTO account (sort_code, account_number, customer_id, account_type_code)
