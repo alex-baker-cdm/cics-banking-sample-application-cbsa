@@ -12,6 +12,7 @@
        DATA DIVISION.
        WORKING-STORAGE SECTION.
        01 WS-MODE                 PIC X(8)   VALUE SPACES.
+       01 WS-SECS-DISP            PIC 9(8)   VALUE 0.
        01 WS-CMD                  PIC X(32)  VALUE SPACES.
 
        LINKAGE SECTION.
@@ -34,8 +35,12 @@
            END-ACCEPT
 
            IF WS-MODE = "real" AND LK-SECONDS > 0
+      *       STRING needs display text, not the raw binary COMP bytes,
+      *       so convert the seconds to a zoned-decimal field first.
+              MOVE LK-SECONDS TO WS-SECS-DISP
+              MOVE SPACES TO WS-CMD
               STRING "sleep " DELIMITED BY SIZE
-                     LK-SECONDS DELIMITED BY SIZE
+                     WS-SECS-DISP DELIMITED BY SIZE
                      INTO WS-CMD
               END-STRING
               CALL "SYSTEM" USING WS-CMD

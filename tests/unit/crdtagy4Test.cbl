@@ -8,7 +8,7 @@
       * See tests/harness/README.md ("CRDTAGY family") for the full list
       * of byte-level differences between the five agencies.
       *
-      * Strategy: seed the CIPB container via CICSCONT, invoke CRDTAGY4
+      * Strategy: seed the CIPD container via CICSCONT, invoke CRDTAGY4
       * (GET container -> compute score -> PUT container), then GET the
       * container back to inspect the score. CRDTAGY4 seeds RANDOM from
       * EIBTASKN, pinned by CBSA_TEST_TASKN, so the result is
