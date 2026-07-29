@@ -609,6 +609,10 @@ def translate(lines):
             j = i
             while "END-EXEC" not in _code(lines[j]).upper():
                 j += 1
+                if j >= n:
+                    raise ValueError(
+                        "Unterminated EXEC block starting at line {} "
+                        "(no END-EXEC found): {!r}".format(i + 1, code.strip()))
                 block.append(_code(lines[j]))
             # Does a period follow END-EXEC on the closing line?
             tail = _code(lines[j]).upper().split("END-EXEC", 1)[1]
