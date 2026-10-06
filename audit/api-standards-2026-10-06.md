@@ -67,26 +67,26 @@
 | Verb | Path | Module | Controller | Line | Drives z/OS Connect API → COBOL |
 |---|---|---|---|---|---|
 | GET | `/customerservices-1.0/enqacct` | Customer Services | WebController.java | 124 | — (renders form) |
-| POST | `/customerservices-1.0/enqacct` | Customer Services | WebController.java | 137 | — |
+| POST | `/customerservices-1.0/enqacct` | Customer Services | WebController.java | 137 | GET /inqaccz/enquiry/{accno} → INQACC |
 | GET | `/customerservices-1.0/enqcust` | Customer Services | WebController.java | 234 | — (renders form) |
-| POST | `/customerservices-1.0/enqcust` | Customer Services | WebController.java | 241 | — |
+| POST | `/customerservices-1.0/enqcust` | Customer Services | WebController.java | 241 | GET /inqcustz/enquiry/{custno} → INQCUST |
 | GET | `/customerservices-1.0/listacc` | Customer Services | WebController.java | 303 | — (renders form) |
-| POST | `/customerservices-1.0/listacc` | Customer Services | WebController.java | 310 | — |
+| POST | `/customerservices-1.0/listacc` | Customer Services | WebController.java | 310 | GET /inqacccz/list/{custno} → INQACCCU |
 | GET | `/customerservices-1.0/createacc` | Customer Services | WebController.java | 372 | — (renders form) |
-| POST | `/customerservices-1.0/createacc` | Customer Services | WebController.java | 381 | — |
+| POST | `/customerservices-1.0/createacc` | Customer Services | WebController.java | 381 | POST /creacc/insert → CREACC |
 | GET | `/customerservices-1.0/createcust` | Customer Services | WebController.java | 482 | — (renders form) |
-| POST | `/customerservices-1.0/createcust` | Customer Services | WebController.java | 490 | — |
+| POST | `/customerservices-1.0/createcust` | Customer Services | WebController.java | 490 | POST /crecust/insert → CRECUST |
 | GET | `/customerservices-1.0/updateacc` | Customer Services | WebController.java | 576 | — (renders form) |
-| POST | `/customerservices-1.0/updateacc` | Customer Services | WebController.java | 587 | — |
+| POST | `/customerservices-1.0/updateacc` | Customer Services | WebController.java | 587 | PUT /updacc/update → UPDACC |
 | GET | `/customerservices-1.0/updatecust` | Customer Services | WebController.java | 679 | — (renders form) |
-| POST | `/customerservices-1.0/updatecust` | Customer Services | WebController.java | 688 | — |
+| POST | `/customerservices-1.0/updatecust` | Customer Services | WebController.java | 688 | PUT /updcust/update → UPDCUST |
 | GET | `/customerservices-1.0/delacct` | Customer Services | WebController.java | 784 | — (renders form) |
-| POST | `/customerservices-1.0/delacct` | Customer Services | WebController.java | 791 | — |
+| POST | `/customerservices-1.0/delacct` | Customer Services | WebController.java | 791 | DELETE /delacc/remove/{accno} → DELACC |
 | GET | `/customerservices-1.0/delcust` | Customer Services | WebController.java | 849 | — (renders form) |
-| POST | `/customerservices-1.0/delcust` | Customer Services | WebController.java | 856 | — |
-| POST | `/paymentinterface-1.1/submit` | Payment | ParamsController.java | 35 | — |
+| POST | `/customerservices-1.0/delcust` | Customer Services | WebController.java | 856 | DELETE /delcus/remove/{custno} → DELCUS |
+| POST | `/paymentinterface-1.1/submit` | Payment | ParamsController.java | 35 | PUT /makepayment/dbcr → DBCRFUN |
 | GET | `/paymentinterface-1.1` | Payment | WebController.java | 51 | — (renders form) |
-| POST | `/paymentinterface-1.1/paydbcr` | Payment | WebController.java | 58 | — |
+| POST | `/paymentinterface-1.1/paydbcr` | Payment | WebController.java | 58 | PUT /makepayment/dbcr → DBCRFUN |
 
 ### z/OS Connect API definitions (`src/zosconnect_artefacts/apis`, Swagger 2.0) → service archive → COBOL program
 
